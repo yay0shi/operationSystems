@@ -1,0 +1,19 @@
+# .NET build output
+[Bb]in/
+[Oo]bj/
+
+# Local IDE settings
+.idea/
+.vs/
+*.user
+*.suo
+*.sln.docstates
+
+# Logs and test results
+*.log
+TestResults/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini

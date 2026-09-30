@@ -1,0 +1,51 @@
+namespace ModelOS.Model;
+
+public sealed class PswEntry
+{
+    /// <summary>
+    /// Идентификатор задания, 0 - нет задания
+    /// </summary>
+    public int TaskId { get; set; }
+
+    /// <summary>
+    /// Размер задания
+    /// </summary>
+    public int TaskSize { get; set; }
+
+    /// <summary>
+    /// Число команд задания
+    /// </summary>
+    public int CommandCount { get; set; }
+
+    /// <summary>
+    /// Счётчик команд процесса
+    /// </summary>
+    public long ProcessPc { get; set; }
+
+    /// <summary>
+    /// Состояние процесса
+    /// </summary>
+    public ProcState State { get; set; } = ProcState.Absent;
+
+    /// <summary>
+    /// Свободна ли строка таблицы
+    /// </summary>
+    public bool IsFree => State == ProcState.Absent;
+
+    /// <summary>
+    /// Сброс строки в Отсутствует
+    /// </summary>
+    public void Clear()
+    {
+        TaskId = 0;
+        TaskSize = 0;
+        CommandCount = 0;
+        ProcessPc = 0;
+        State = ProcState.Absent;
+    }
+
+    /// <summary>
+    /// Копия для PSW[i] = PSW_Task
+    /// </summary>
+    public PswEntry Clone() => (PswEntry)MemberwiseClone();
+}
