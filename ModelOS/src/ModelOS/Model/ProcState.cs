@@ -11,6 +11,10 @@ public enum ProcState
     /// Готов - процесс загружен и ждёт процессора
     /// </summary>
     Ready = 1,
+    /// <summary>
+    /// Выполняется на центральном процессоре
+    /// </summary>
+    Running = 2,
 }
 
 public static class ProcStateNames
@@ -19,6 +23,7 @@ public static class ProcStateNames
     {
         ProcState.Absent => "Отсутствует",
         ProcState.Ready => "Готов",
+        ProcState.Running => "Выполняется",
         _ => "?",
     };
 }

@@ -2,6 +2,11 @@ namespace ModelOS.Model;
 
 public sealed class OsModel
 {
+    private readonly ModelParameters _parameters;
+
+    // Назначение процесса и исполнение команд
+    public int CurrentProcessIndex { get; private set; } = -1;
+    public string ProcessorCommand { get; private set; } = "Ожидание";
     // значения по умолчанию
     public const double MinSpeed = 0.1;      
     public const double MaxSpeed = 1000.0;   
@@ -59,8 +64,10 @@ public sealed class OsModel
     /// </summary>
     private int _taskSeq;
 
-    public OsModel()
+    public OsModel(ModelParameters? parameters = null)
     {
+        _parameters = parameters ?? new ModelParameters();
+        _parameters.Validate();
         for (int i = 0; i < Psw.Length; i++)
             Psw[i] = new PswEntry();
     }
@@ -75,7 +82,9 @@ public sealed class OsModel
         Pc = 0;
         Speed = DefaultSpeed;
         Finish = false;
-        MemSize = DefaultMemSize;
+        MemSize = _parameters.MemorySize;
+        CurrentProcessIndex = -1;
+        ProcessorCommand = "Ожидание";
         MemUsed = 0;
         ProcCount = 0;
         _taskSeq = 0;
@@ -88,8 +97,8 @@ public sealed class OsModel
     {
         _taskSeq++;
         PswTask.TaskId = _taskSeq;
-        PswTask.TaskSize = DefaultTaskSize;
-        PswTask.CommandCount = DefaultTaskCommands;
+        PswTask.TaskSize = _parameters.TaskSize;
+        PswTask.CommandCount = _parameters.TaskCommands;
         PswTask.State = ProcState.Ready;
         PswTask.ProcessPc = 0;
     }
@@ -184,7 +193,7 @@ public sealed class OsModel
     }
 
     public static string ShowHelpText() =>
-        "вариант 27: один ЦПр; в lab1 выбор первого готового процесса" + Environment.NewLine +
+        "вариант 27: один ЦПр, относительнвые приоритеты" + Environment.NewLine +
         Environment.NewLine +
         "НАЗНАЧЕНИЕ" + Environment.NewLine +
         "  Каждый такт: счетчик команд PC увеличивается на единицу." + Environment.NewLine +
@@ -200,6 +209,8 @@ public sealed class OsModel
         "  PC и Speed – индикаторы справа от кнопок" + Environment.NewLine +
         "  Факт – измеренная скорость с последнего изменения Speed" + Environment.NewLine +
         "  Таблица PSW – задания, счётчики, состояния" + Environment.NewLine +
+        "  Состояния: отсутствует, готов, выполняется." + Environment.NewLine +
+        "  Память и буфер – результат начальной загрузки." + Environment.NewLine +
         "  Строка ввода и журнал – команды оператора" + Environment.NewLine +
         Environment.NewLine +
         "ДИАПАЗОНЫ" + Environment.NewLine +

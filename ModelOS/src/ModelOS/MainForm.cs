@@ -22,6 +22,9 @@ public sealed class MainForm : Form
     private readonly Label _lblPc = new() { AutoSize = true };
     private readonly Label _lblSpeed = new() { AutoSize = true };
     private readonly Label _lblActualSpeed = new() { AutoSize = true };
+    private readonly Label _lblMemory = new() { AutoSize = true };
+    private readonly Label _lblBuffer = new() { AutoSize = true };
+    private readonly Label _lblProcessor = new() { AutoSize = true };
 
     private readonly TextBox _cmd = new() { Width = 400 };
     private readonly Button _btnRun = new() { Text = "Выполнить", AutoSize = true };
@@ -33,8 +36,8 @@ public sealed class MainForm : Form
         AllowUserToAddRows = false,
         AllowUserToDeleteRows = false,
         RowHeadersVisible = false,
-        Width = 620,
-        Height = 220,
+        Width = 740,
+        Height = 430,
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
     };
 
@@ -50,16 +53,37 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.TopDown,
             AutoScroll = true,
+            WrapContents = false,
         };
-        var buttons = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+        var buttons = new FlowLayoutPanel { AutoSize = true, MaximumSize = new Size(740, 0), FlowDirection = FlowDirection.LeftToRight };
         buttons.Controls.Add(_btnFaster);
         buttons.Controls.Add(_btnSlower);
         buttons.Controls.Add(_btnHelp);
         buttons.Controls.Add(_btnFinish);
-        buttons.Controls.Add(_lblPc);
-        buttons.Controls.Add(_lblSpeed);
-        buttons.Controls.Add(_lblActualSpeed);
         info.Controls.Add(buttons);
+        var indicators = new TableLayoutPanel
+        {
+            Width = 740,
+            Height = 28,
+            ColumnCount = 3,
+            RowCount = 1,
+        };
+        indicators.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+        indicators.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
+        indicators.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        foreach (var label in new[] { _lblPc, _lblSpeed, _lblActualSpeed })
+        {
+            label.AutoSize = false;
+            label.Dock = DockStyle.Fill;
+            label.TextAlign = ContentAlignment.MiddleLeft;
+        }
+        indicators.Controls.Add(_lblPc, 0, 0);
+        indicators.Controls.Add(_lblSpeed, 1, 0);
+        indicators.Controls.Add(_lblActualSpeed, 2, 0);
+        info.Controls.Add(indicators);
+        info.Controls.Add(_lblProcessor);
+        info.Controls.Add(_lblMemory);
+        info.Controls.Add(_lblBuffer);
 
         _grid.ColumnCount = 6;
         _grid.Columns[0].Name = "№";
@@ -68,6 +92,8 @@ public sealed class MainForm : Form
         _grid.Columns[3].Name = "N_cmnd";
         _grid.Columns[4].Name = "PCi";
         _grid.Columns[5].Name = "Состояние";
+        _grid.Columns[0].FillWeight = 45;
+        _grid.Columns[5].FillWeight = 150;
         _grid.RowCount = OsModel.PswCapacity;
         info.Controls.Add(_grid);
 
@@ -226,6 +252,9 @@ public sealed class MainForm : Form
         double measuredSeconds = (_clock.Elapsed - _measurementStartTime).TotalSeconds;
         double measuredSpeed = measuredSeconds > 0 ? (_model.Pc - _measurementStartPc) / measuredSeconds : 0;
         _lblActualSpeed.Text = $"Факт: {measuredSpeed:0.##} такт/с ({measuredSeconds:0.#} с)";
+        _lblProcessor.Text = $"ЦПр: процесс {(_model.CurrentProcessIndex < 0 ? "не назначен" : _model.CurrentProcessIndex.ToString())}; команда: {_model.ProcessorCommand}";
+        _lblMemory.Text = $"Память: всего {_model.MemSize}; занято {_model.MemUsed}; свободно {_model.FreeMemory}; процессов {_model.ProcCount}";
+        _lblBuffer.Text = $"Буфер: задание {_model.PswTask.TaskId}; память {_model.PswTask.TaskSize}; команд {_model.PswTask.CommandCount}; загрузка {(_model.CheckFreeMem() ? "возможна" : "невозможна")}";
         for (int i = 0; i < OsModel.PswCapacity; i++)
         {
             var p = _model.Psw[i];
