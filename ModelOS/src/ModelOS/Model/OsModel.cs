@@ -4,15 +4,17 @@ public sealed class OsModel
 {
     private readonly ModelParameters _parameters;
 
-    // Назначение процесса и исполнение команд
+    // Назначение процесса и диспетчеризация
     public int CurrentProcessIndex { get; private set; } = -1;
-    public string ProcessorCommand { get; private set; } = "Ожидание";
+    public string ProcessorState { get; private set; } = "Ожидание";
     // значения по умолчанию
     public const double MinSpeed = 0.1;      
     public const double MaxSpeed = 1000.0;   
     public const double SpeedStepUp = 1.1;   
     public const double SpeedStepDown = 0.9; 
     public const int PswCapacity = 16; // мест в таблице PSW 
+    public const int DefaultQuantumTicks = 5;
+    public const int DefaultPriorityLevels = 3;
 
     public const double DefaultSpeed = 10.0; 
     public const int DefaultMemSize = 1024;  // V_озу
@@ -23,6 +25,14 @@ public sealed class OsModel
     /// Аппаратный счётчик команд
     /// </summary>
     public long Pc { get; private set; }
+
+    /// <summary>
+    /// Общее число исполненных модельных команд; монотонный счётчик для измерения скорости
+    /// </summary>
+    public long TotalTicks { get; private set; }
+
+    public int QuantumTicks => _parameters.QuantumTicks;
+    public int QuantumRemaining { get; private set; }
 
     /// <summary>
     /// Скорость модели
@@ -63,6 +73,8 @@ public sealed class OsModel
     ///  Task_Id
     /// </summary>
     private int _taskSeq;
+    private long _readySequence;
+    private bool _deferDispatch;
 
     public OsModel(ModelParameters? parameters = null)
     {
@@ -80,14 +92,17 @@ public sealed class OsModel
     public void InitModel()
     {
         Pc = 0;
+        TotalTicks = 0;
         Speed = DefaultSpeed;
         Finish = false;
         MemSize = _parameters.MemorySize;
         CurrentProcessIndex = -1;
-        ProcessorCommand = "Ожидание";
+        ProcessorState = "Ожидание";
+        QuantumRemaining = 0;
         MemUsed = 0;
         ProcCount = 0;
         _taskSeq = 0;
+        _readySequence = 0;
         for (int i = 0; i < Psw.Length; i++)
             Psw[i].Clear();
         GenNewTask(); // первое задание в буфере для LoadCycle
@@ -99,8 +114,11 @@ public sealed class OsModel
         PswTask.TaskId = _taskSeq;
         PswTask.TaskSize = _parameters.TaskSize;
         PswTask.CommandCount = _parameters.TaskCommands;
+        // приоритеты распределяются циклически от 1 до PriorityLevels
+        PswTask.Priority = ((_taskSeq - 1) % _parameters.PriorityLevels) + 1;
         PswTask.State = ProcState.Ready;
         PswTask.ProcessPc = 0;
+        PswTask.ReadyOrder = 0;
     }
 
     /// <summary>
@@ -131,40 +149,113 @@ public sealed class OsModel
         if (!CheckFreeMem())
             return false;
         int i = FindFreePsw();
-        Psw[i] = PswTask.Clone();   
+        Psw[i] = PswTask.Clone();
+        Psw[i].ReadyOrder = ++_readySequence;
         MemUsed += PswTask.TaskSize;
         ProcCount++;
         GenNewTask();    
+        if (CurrentProcessIndex < 0 && !_deferDispatch)
+            DispatchNextProcess();
         return true;
     }
     
     public void LoadCycle()
     {
-        while (CheckFreeMem())
-            LoadTask();
+        _deferDispatch = true;
+        try
+        {
+            while (CheckFreeMem())
+                LoadTask();
+        }
+        finally
+        {
+            _deferDispatch = false;
+        }
+
+        if (CurrentProcessIndex < 0)
+            DispatchNextProcess();
     }
     
     public void DoTick()
     {
-        int active = FirstReadyIndex; 
-        if (active < 0)
-            return; // нет активного процесса – пропуск такта
+        if (CurrentProcessIndex < 0)
+            DispatchNextProcess();
+        if (CurrentProcessIndex < 0)
+            return;
+
+        int active = CurrentProcessIndex;
         Pc++;
-        Psw[active].ProcessPc++;
+        TotalTicks++;
+        Psw[active].ProcessPc = Pc;
+        QuantumRemaining--;
+
+        if (QuantumRemaining == 0)
+            DispatchNextProcess();
     }
 
     /// <summary>
-    /// Индекс первого готового процесса (заглушка планировщика lab1)
+    /// Сохраняет аппаратный счётчик команд в слове состояния активного процесса.
     /// </summary>
-    public int FirstReadyIndex
+    public void SaveProcessState(int processIndex)
     {
-        get
+        if ((uint)processIndex >= Psw.Length || Psw[processIndex].IsFree)
+            throw new ArgumentOutOfRangeException(nameof(processIndex));
+        Psw[processIndex].ProcessPc = Pc;
+    }
+
+    /// <summary>Восстанавливает аппаратный счётчик команд из слова состояния процесса.</summary>
+    public void RestoreProcessState(int processIndex)
+    {
+        if ((uint)processIndex >= Psw.Length || Psw[processIndex].IsFree)
+            throw new ArgumentOutOfRangeException(nameof(processIndex));
+        Pc = Psw[processIndex].ProcessPc;
+    }
+
+    /// <summary>
+    /// Выбирает процесс с максимальным приоритетом, при равенстве – раньше вставленный в очередь
+    /// </summary>
+    public int GetNextProcessIndex()
+    {
+        int best = -1;
+        for (int i = 0; i < Psw.Length; i++)
         {
-            for (int i = 0; i < Psw.Length; i++)
-                if (Psw[i].State == ProcState.Ready)
-                    return i;
-            return -1;
+            PswEntry candidate = Psw[i];
+            if (candidate.State != ProcState.Ready)
+                continue;
+            if (best < 0 || candidate.Priority > Psw[best].Priority ||
+                (candidate.Priority == Psw[best].Priority && candidate.ReadyOrder < Psw[best].ReadyOrder))
+                best = i;
         }
+        return best;
+    }
+
+    /// <summary>
+    /// Сохраняет прежний контекст и назначает ЦПр следующему готовому процессу
+    /// </summary>
+    public void DispatchNextProcess()
+    {
+        if (CurrentProcessIndex >= 0)
+        {
+            int previous = CurrentProcessIndex;
+            SaveProcessState(previous);
+            Psw[previous].State = ProcState.Ready;
+            Psw[previous].ReadyOrder = ++_readySequence;
+            CurrentProcessIndex = -1;
+        }
+
+        int next = GetNextProcessIndex();
+        if (next < 0)
+        {
+            QuantumRemaining = 0;
+            ProcessorState = "Ожидание";
+            return;
+        }
+
+        Psw[next].State = ProcState.Running;
+        CurrentProcessIndex = next;
+        RestoreProcessState(next);
+        QuantumRemaining = QuantumTicks;
+        ProcessorState = "Работа";
     }
     
     /// <summary>
@@ -196,7 +287,9 @@ public sealed class OsModel
         "вариант 27: один ЦПр, относительнвые приоритеты" + Environment.NewLine +
         Environment.NewLine +
         "НАЗНАЧЕНИЕ" + Environment.NewLine +
-        "  Каждый такт: счетчик команд PC увеличивается на единицу." + Environment.NewLine +
+        $"  ЦПр выдаёт активному процессу квант {DefaultQuantumTicks} тактов. По окончании кванта" + Environment.NewLine +
+        "  выбирается готовый процесс с наибольшим приоритетом; равные обслуживаются по FIFO." + Environment.NewLine +
+        "  PC сохраняется при переключении и восстанавливается при назначении процесса." + Environment.NewLine +
         Environment.NewLine +
         "КОМАНДЫ ОПЕРАТОРА" + Environment.NewLine +
         "  ?       вывести эту справку" + Environment.NewLine +
@@ -206,10 +299,11 @@ public sealed class OsModel
         Environment.NewLine +
         "ОКНО МОДЕЛИ" + Environment.NewLine +
         "  Кнопки  четыре директивы оператора" + Environment.NewLine +
-        "  PC и Speed – индикаторы справа от кнопок" + Environment.NewLine +
-        "  Факт – измеренная скорость с последнего изменения Speed" + Environment.NewLine +
+        "  PC – счётчик команд текущего активного процесса; Speed – заданная скорость" + Environment.NewLine +
+        "  Факт – число исполненных команд модели за время текущего замера" + Environment.NewLine +
         "  Таблица PSW – задания, счётчики, состояния" + Environment.NewLine +
-        "  Состояния: отсутствует, готов, выполняется." + Environment.NewLine +
+        "  Состояния PSW: отсутствует, загружается, активен, готов, ввод-вывод," + Environment.NewLine +
+        "  блокировка памяти/ввода-вывода, приостановлен." + Environment.NewLine +
         "  Память и буфер – результат начальной загрузки." + Environment.NewLine +
         "  Строка ввода и журнал – команды оператора" + Environment.NewLine +
         Environment.NewLine +

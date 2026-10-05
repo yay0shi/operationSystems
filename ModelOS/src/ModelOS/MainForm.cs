@@ -12,7 +12,7 @@ public sealed class MainForm : Form
     private TimeSpan _lastPumpTime;
     private TimeSpan _lastDisplayTime;
     private TimeSpan _measurementStartTime;
-    private long _measurementStartPc;
+    private long _measurementStartTicks;
 
     private readonly Button _btnFaster = new() { Text = "+ быстрее", AutoSize = true };
     private readonly Button _btnSlower = new() { Text = "− медленнее", AutoSize = true };
@@ -25,10 +25,11 @@ public sealed class MainForm : Form
     private readonly Label _lblMemory = new() { AutoSize = true };
     private readonly Label _lblBuffer = new() { AutoSize = true };
     private readonly Label _lblProcessor = new() { AutoSize = true };
+    private readonly Label _lblQuantum = new() { AutoSize = true };
 
-    private readonly TextBox _cmd = new() { Width = 400 };
+    private readonly TextBox _cmd = new() { Width = 560 };
     private readonly Button _btnRun = new() { Text = "Выполнить", AutoSize = true };
-    private readonly TextBox _log = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Width = 620, Height = 90 };
+    private readonly TextBox _log = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Width = 960, Height = 90 };
 
     private readonly DataGridView _grid = new()
     {
@@ -36,16 +37,17 @@ public sealed class MainForm : Form
         AllowUserToAddRows = false,
         AllowUserToDeleteRows = false,
         RowHeadersVisible = false,
-        Width = 740,
-        Height = 430,
+        Width = 960,
+        Height = 380,
         AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+        AllowUserToResizeRows = false,
     };
 
     public MainForm()
     {
         Text = "Модель ОС";
-        Width = 800;
-        Height = 800;
+        Width = 1100;
+        Height = 1000;
         StartPosition = FormStartPosition.CenterScreen;
 
         var info = new FlowLayoutPanel
@@ -55,7 +57,7 @@ public sealed class MainForm : Form
             AutoScroll = true,
             WrapContents = false,
         };
-        var buttons = new FlowLayoutPanel { AutoSize = true, MaximumSize = new Size(740, 0), FlowDirection = FlowDirection.LeftToRight };
+        var buttons = new FlowLayoutPanel { AutoSize = true, MaximumSize = new Size(960, 0), FlowDirection = FlowDirection.LeftToRight };
         buttons.Controls.Add(_btnFaster);
         buttons.Controls.Add(_btnSlower);
         buttons.Controls.Add(_btnHelp);
@@ -63,7 +65,7 @@ public sealed class MainForm : Form
         info.Controls.Add(buttons);
         var indicators = new TableLayoutPanel
         {
-            Width = 740,
+            Width = 960,
             Height = 28,
             ColumnCount = 3,
             RowCount = 1,
@@ -82,18 +84,22 @@ public sealed class MainForm : Form
         indicators.Controls.Add(_lblActualSpeed, 2, 0);
         info.Controls.Add(indicators);
         info.Controls.Add(_lblProcessor);
+        info.Controls.Add(_lblQuantum);
         info.Controls.Add(_lblMemory);
         info.Controls.Add(_lblBuffer);
 
-        _grid.ColumnCount = 6;
+        _grid.ColumnCount = 7;
+        _grid.RowTemplate.Height = 19;
+        _grid.ColumnHeadersHeight = 24;
         _grid.Columns[0].Name = "№";
         _grid.Columns[1].Name = "Task_Id";
         _grid.Columns[2].Name = "V_task";
         _grid.Columns[3].Name = "N_cmnd";
         _grid.Columns[4].Name = "PCi";
-        _grid.Columns[5].Name = "Состояние";
+        _grid.Columns[5].Name = "Приоритет";
+        _grid.Columns[6].Name = "Состояние";
         _grid.Columns[0].FillWeight = 45;
-        _grid.Columns[5].FillWeight = 150;
+        _grid.Columns[6].FillWeight = 130;
         _grid.RowCount = OsModel.PswCapacity;
         info.Controls.Add(_grid);
 
@@ -216,7 +222,7 @@ public sealed class MainForm : Form
     private void ResetSpeedMeasurement()
     {
         _measurementStartTime = _clock.Elapsed;
-        _measurementStartPc = _model.Pc;
+        _measurementStartTicks = _model.TotalTicks;
     }
 
     internal static void ShowHelp(IWin32Window? owner)
@@ -250,15 +256,16 @@ public sealed class MainForm : Form
         _lblPc.Text = $"PC: {_model.Pc}";
         _lblSpeed.Text = $"Speed: {_model.Speed:0.###} такт/с";
         double measuredSeconds = (_clock.Elapsed - _measurementStartTime).TotalSeconds;
-        double measuredSpeed = measuredSeconds > 0 ? (_model.Pc - _measurementStartPc) / measuredSeconds : 0;
+        double measuredSpeed = measuredSeconds > 0 ? (_model.TotalTicks - _measurementStartTicks) / measuredSeconds : 0;
         _lblActualSpeed.Text = $"Факт: {measuredSpeed:0.##} такт/с ({measuredSeconds:0.#} с)";
-        _lblProcessor.Text = $"ЦПр: процесс {(_model.CurrentProcessIndex < 0 ? "не назначен" : _model.CurrentProcessIndex.ToString())}; команда: {_model.ProcessorCommand}";
+        _lblProcessor.Text = $"ЦПр: процесс {(_model.CurrentProcessIndex < 0 ? "не назначен" : _model.CurrentProcessIndex.ToString())}; состояние: {_model.ProcessorState}";
+        _lblQuantum.Text = $"Квант: {_model.QuantumTicks}; осталось: {_model.QuantumRemaining}";
         _lblMemory.Text = $"Память: всего {_model.MemSize}; занято {_model.MemUsed}; свободно {_model.FreeMemory}; процессов {_model.ProcCount}";
         _lblBuffer.Text = $"Буфер: задание {_model.PswTask.TaskId}; память {_model.PswTask.TaskSize}; команд {_model.PswTask.CommandCount}; загрузка {(_model.CheckFreeMem() ? "возможна" : "невозможна")}";
         for (int i = 0; i < OsModel.PswCapacity; i++)
         {
             var p = _model.Psw[i];
-            _grid.Rows[i].SetValues(i, p.TaskId, p.TaskSize, p.CommandCount, p.ProcessPc, p.State.ToDisplay());
+            _grid.Rows[i].SetValues(i, p.TaskId, p.TaskSize, p.CommandCount, p.ProcessPc, p.Priority, p.State.ToDisplay());
         }
 
     }

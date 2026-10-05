@@ -23,6 +23,16 @@ public sealed class PswEntry
     public long ProcessPc { get; set; }
 
     /// <summary>
+    /// Относительный приоритет
+    /// </summary>
+    public int Priority { get; set; }
+
+    /// <summary>
+    /// Порядок попадания в очередь готовых процессов
+    /// </summary>
+    public long ReadyOrder { get; set; }
+
+    /// <summary>
     /// Состояние процесса
     /// </summary>
     public ProcState State { get; set; } = ProcState.Absent;
@@ -41,6 +51,8 @@ public sealed class PswEntry
         TaskSize = 0;
         CommandCount = 0;
         ProcessPc = 0;
+        Priority = 0;
+        ReadyOrder = 0;
         State = ProcState.Absent;
     }
 
