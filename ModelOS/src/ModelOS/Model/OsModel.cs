@@ -3,6 +3,7 @@ namespace ModelOS.Model;
 public sealed class OsModel
 {
     private readonly ModelParameters _parameters;
+    private readonly CommandExecutor _commands;
 
     // Назначение процесса и диспетчеризация
     public int CurrentProcessIndex { get; private set; } = -1;
@@ -27,9 +28,17 @@ public sealed class OsModel
     public long Pc { get; private set; }
 
     /// <summary>
-    /// Общее число исполненных модельных команд; монотонный счётчик для измерения скорости
+    /// Общее число модельных тактов, включая простой ЦПр
     /// </summary>
     public long TotalTicks { get; private set; }
+    public long ExecutedCommandCount { get; private set; }
+    public long CompletedTaskCount { get; private set; }
+    public long IoRequestCount { get; private set; }
+    public string LastCommandText { get; private set; } = "Нет выполненной команды";
+    public ProcessCommand? LastCommand { get; private set; }
+    public int LastCommandTaskId { get; private set; }
+    public int IoCommandPercent => _parameters.IoCommandPercent;
+    public int IoTicks => _parameters.IoTicks;
 
     public int QuantumTicks => _parameters.QuantumTicks;
     public int QuantumRemaining { get; private set; }
@@ -80,6 +89,7 @@ public sealed class OsModel
     {
         _parameters = parameters ?? new ModelParameters();
         _parameters.Validate();
+        _commands = new CommandExecutor(_parameters.RandomSeed);
         for (int i = 0; i < Psw.Length; i++)
             Psw[i] = new PswEntry();
     }
@@ -93,6 +103,12 @@ public sealed class OsModel
     {
         Pc = 0;
         TotalTicks = 0;
+        ExecutedCommandCount = 0;
+        CompletedTaskCount = 0;
+        IoRequestCount = 0;
+        LastCommand = null;
+        LastCommandTaskId = 0;
+        LastCommandText = "Нет выполненной команды";
         Speed = DefaultSpeed;
         Finish = false;
         MemSize = _parameters.MemorySize;
@@ -119,6 +135,8 @@ public sealed class OsModel
         PswTask.State = ProcState.Ready;
         PswTask.ProcessPc = 0;
         PswTask.ReadyOrder = 0;
+        PswTask.IoTicksRemaining = 0;
+        PswTask.OperandMemory = [];
     }
 
     /// <summary>
@@ -150,6 +168,7 @@ public sealed class OsModel
             return false;
         int i = FindFreePsw();
         Psw[i] = PswTask.Clone();
+        Psw[i].OperandMemory = Enumerable.Repeat(1.0, Psw[i].TaskSize).ToArray();
         Psw[i].ReadyOrder = ++_readySequence;
         MemUsed += PswTask.TaskSize;
         ProcCount++;
@@ -178,19 +197,112 @@ public sealed class OsModel
     
     public void DoTick()
     {
+        TotalTicks++;
+        AdvanceIo();
         if (CurrentProcessIndex < 0)
             DispatchNextProcess();
         if (CurrentProcessIndex < 0)
             return;
+        ExecuteProcessCommand();
+    }
 
-        int active = CurrentProcessIndex;
-        Pc++;
-        TotalTicks++;
-        Psw[active].ProcessPc = Pc;
+    /// <summary>
+    /// Выборка, увеличение PC, декодирование, чтение, операция и запись
+    /// </summary>
+    private void ExecuteProcessCommand()
+    {
+        PswEntry process = Psw[CurrentProcessIndex];
+        CommandType type = _commands.GenerateCommand(Pc, process.CommandCount, IoCommandPercent);
+        Pc++; // Длина любой команды = 1
+        process.ProcessPc = Pc;
+        ProcessCommand command = _commands.DecodeCommand(type, process.TaskSize);
+        LastCommand = command;
+        LastCommandTaskId = process.TaskId;
+        ExecutedCommandCount++;
         QuantumRemaining--;
+        ExecuteOperation(process, command);
+    }
 
-        if (QuantumRemaining == 0)
-            DispatchNextProcess();
+    /// <summary>
+    /// Выполнение распознанной операции: АЛУ, системная инициализация I/O или выгрузка
+    /// </summary>
+    private void ExecuteOperation(PswEntry process, ProcessCommand command)
+    {
+        switch (command.Operation)
+        {
+            case OperationCode.Add:
+            case OperationCode.Subtract:
+            case OperationCode.Multiply:
+                ExecuteComputation(process, command);
+                if (QuantumRemaining == 0) DispatchNextProcess();
+                break;
+            case OperationCode.Io:
+                InitializeIo();
+                break;
+            case OperationCode.Exit:
+                FinishProcess();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(command));
+        }
+    }
+
+    private void ExecuteComputation(PswEntry process, ProcessCommand command)
+    {
+        double first = CommandExecutor.ReadOperand(process, command.Address1);
+        double second = CommandExecutor.ReadOperand(process, command.Address2);
+        double result = CommandExecutor.DoOperation(command.Operation, first, second);
+        CommandExecutor.WriteResult(process, command.Address2, result);
+        string op = command.Operation switch { OperationCode.Add => "+", OperationCode.Subtract => "−", _ => "×" };
+        LastCommandText = $"Задание {process.TaskId}: вычисление [{command.Address1}] {op} [{command.Address2}] = {result:0.###}";
+    }
+
+    private void InitializeIo()
+    {
+        PswEntry process = Psw[CurrentProcessIndex];
+        SaveProcessState(CurrentProcessIndex);
+        process.State = ProcState.IoInitializing;
+        process.IoTicksRemaining = IoTicks;
+        IoRequestCount++;
+        LastCommandText = $"Задание {process.TaskId}: ввод-вывод, длительность {IoTicks} тактов";
+        ReleaseProcessor();
+        DispatchNextProcess();
+    }
+
+    /// <summary>
+    /// I/O выполняется независимо от занятости ЦПр, начиная со следующего такта после запроса
+    /// </summary>
+    private void AdvanceIo()
+    {
+        foreach (PswEntry process in Psw)
+        {
+            if (process.State is not (ProcState.IoInitializing or ProcState.BlockedByIo)) continue;
+            process.State = ProcState.BlockedByIo;
+            process.IoTicksRemaining--;
+            if (process.IoTicksRemaining != 0) continue;
+            process.State = ProcState.Ready;
+            process.ReadyOrder = ++_readySequence;
+        }
+    }
+
+    private void FinishProcess()
+    {
+        PswEntry process = Psw[CurrentProcessIndex];
+        LastCommandText = $"Задание {process.TaskId}: завершение; освобождено {process.TaskSize} единиц памяти";
+        MemUsed -= process.TaskSize;
+        ProcCount--;
+        CompletedTaskCount++;
+        process.Clear();
+        ReleaseProcessor();
+        LoadCycle(); // Одно или несколько заданий из буфера при наличии ресурсов
+    }
+
+    private void ReleaseProcessor()
+    {
+        CurrentProcessIndex = -1;
+        Pc = 0;
+        QuantumRemaining = 0;
+        ProcessorState = "Ожидание";
     }
 
     /// <summary>
@@ -284,12 +396,15 @@ public sealed class OsModel
     }
 
     public static string ShowHelpText() =>
-        "вариант 27: один ЦПр, относительнвые приоритеты" + Environment.NewLine +
+        "Лабораторная 4. Вариант 27: один ЦПр, относительные приоритеты (алгоритм 7)" + Environment.NewLine +
         Environment.NewLine +
         "НАЗНАЧЕНИЕ" + Environment.NewLine +
         $"  ЦПр выдаёт активному процессу квант {DefaultQuantumTicks} тактов. По окончании кванта" + Environment.NewLine +
         "  выбирается готовый процесс с наибольшим приоритетом; равные обслуживаются по FIFO." + Environment.NewLine +
         "  PC сохраняется при переключении и восстанавливается при назначении процесса." + Environment.NewLine +
+        "  Вычисление занимает один такт; ввод-вывод блокирует процесс и выполняется параллельно ЦПр." + Environment.NewLine +
+        "  Завершение освобождает память, после чего загружается задание из буфера." + Environment.NewLine +
+        "  Параметры модели: 20 % I/O-команд, длительность I/O 5 тактов, выгрузка 1 такт." + Environment.NewLine +
         Environment.NewLine +
         "КОМАНДЫ ОПЕРАТОРА" + Environment.NewLine +
         "  ?       вывести эту справку" + Environment.NewLine +
@@ -300,11 +415,12 @@ public sealed class OsModel
         "ОКНО МОДЕЛИ" + Environment.NewLine +
         "  Кнопки  четыре директивы оператора" + Environment.NewLine +
         "  PC – счётчик команд текущего активного процесса; Speed – заданная скорость" + Environment.NewLine +
-        "  Факт – число исполненных команд модели за время текущего замера" + Environment.NewLine +
+        "  Факт – число модельных тактов за время текущего замера, включая простой ЦПр" + Environment.NewLine +
+        "  Последняя команда – задание, тип и результат ранее исполненной команды" + Environment.NewLine +
         "  Таблица PSW – задания, счётчики, состояния" + Environment.NewLine +
         "  Состояния PSW: отсутствует, загружается, активен, готов, ввод-вывод," + Environment.NewLine +
         "  блокировка памяти/ввода-вывода, приостановлен." + Environment.NewLine +
-        "  Память и буфер – результат начальной загрузки." + Environment.NewLine +
+        "  Память и буфер обновляются при загрузке и завершении процессов." + Environment.NewLine +
         "  Строка ввода и журнал – команды оператора" + Environment.NewLine +
         Environment.NewLine +
         "ДИАПАЗОНЫ" + Environment.NewLine +

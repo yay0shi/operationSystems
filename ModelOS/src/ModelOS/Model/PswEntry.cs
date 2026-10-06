@@ -33,6 +33,16 @@ public sealed class PswEntry
     public long ReadyOrder { get; set; }
 
     /// <summary>
+    /// Оставшаяся длительность операции ввода-вывода в модельных тактах
+    /// </summary>
+    public int IoTicksRemaining { get; set; }
+
+    /// <summary>
+    /// Данные процесса, адреса математические: от 0 до TaskSize - 1
+    /// </summary>
+    public double[] OperandMemory { get; set; } = [];
+
+    /// <summary>
     /// Состояние процесса
     /// </summary>
     public ProcState State { get; set; } = ProcState.Absent;
@@ -53,11 +63,18 @@ public sealed class PswEntry
         ProcessPc = 0;
         Priority = 0;
         ReadyOrder = 0;
+        IoTicksRemaining = 0;
+        OperandMemory = [];
         State = ProcState.Absent;
     }
 
     /// <summary>
     /// Копия для PSW[i] = PSW_Task
     /// </summary>
-    public PswEntry Clone() => (PswEntry)MemberwiseClone();
+    public PswEntry Clone()
+    {
+        var copy = (PswEntry)MemberwiseClone();
+        copy.OperandMemory = (double[])OperandMemory.Clone();
+        return copy;
+    }
 }

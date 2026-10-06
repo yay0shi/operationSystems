@@ -26,6 +26,8 @@ public sealed class MainForm : Form
     private readonly Label _lblBuffer = new() { AutoSize = true };
     private readonly Label _lblProcessor = new() { AutoSize = true };
     private readonly Label _lblQuantum = new() { AutoSize = true };
+    private readonly Label _lblCommand = new() { AutoSize = true, MaximumSize = new Size(1000, 0) };
+    private readonly Label _lblStatistics = new() { AutoSize = true };
 
     private readonly TextBox _cmd = new() { Width = 560 };
     private readonly Button _btnRun = new() { Text = "Выполнить", AutoSize = true };
@@ -85,10 +87,12 @@ public sealed class MainForm : Form
         info.Controls.Add(indicators);
         info.Controls.Add(_lblProcessor);
         info.Controls.Add(_lblQuantum);
+        info.Controls.Add(_lblCommand);
+        info.Controls.Add(_lblStatistics);
         info.Controls.Add(_lblMemory);
         info.Controls.Add(_lblBuffer);
 
-        _grid.ColumnCount = 7;
+        _grid.ColumnCount = 8;
         _grid.RowTemplate.Height = 19;
         _grid.ColumnHeadersHeight = 24;
         _grid.Columns[0].Name = "№";
@@ -98,8 +102,10 @@ public sealed class MainForm : Form
         _grid.Columns[4].Name = "PCi";
         _grid.Columns[5].Name = "Приоритет";
         _grid.Columns[6].Name = "Состояние";
+        _grid.Columns[7].Name = "Остаток IO";
         _grid.Columns[0].FillWeight = 45;
-        _grid.Columns[6].FillWeight = 130;
+        _grid.Columns[6].FillWeight = 180;
+        _grid.Columns[7].FillWeight = 75;
         _grid.RowCount = OsModel.PswCapacity;
         info.Controls.Add(_grid);
 
@@ -260,12 +266,14 @@ public sealed class MainForm : Form
         _lblActualSpeed.Text = $"Факт: {measuredSpeed:0.##} такт/с ({measuredSeconds:0.#} с)";
         _lblProcessor.Text = $"ЦПр: процесс {(_model.CurrentProcessIndex < 0 ? "не назначен" : _model.CurrentProcessIndex.ToString())}; состояние: {_model.ProcessorState}";
         _lblQuantum.Text = $"Квант: {_model.QuantumTicks}; осталось: {_model.QuantumRemaining}";
+        _lblCommand.Text = $"Последняя команда ЦПр: {_model.LastCommandText}";
+        _lblStatistics.Text = $"Завершено заданий: {_model.CompletedTaskCount}; команд: {_model.ExecutedCommandCount}; запросов IO: {_model.IoRequestCount}; IO: {_model.IoCommandPercent} %, {_model.IoTicks} тактов";
         _lblMemory.Text = $"Память: всего {_model.MemSize}; занято {_model.MemUsed}; свободно {_model.FreeMemory}; процессов {_model.ProcCount}";
         _lblBuffer.Text = $"Буфер: задание {_model.PswTask.TaskId}; память {_model.PswTask.TaskSize}; команд {_model.PswTask.CommandCount}; загрузка {(_model.CheckFreeMem() ? "возможна" : "невозможна")}";
         for (int i = 0; i < OsModel.PswCapacity; i++)
         {
             var p = _model.Psw[i];
-            _grid.Rows[i].SetValues(i, p.TaskId, p.TaskSize, p.CommandCount, p.ProcessPc, p.Priority, p.State.ToDisplay());
+            _grid.Rows[i].SetValues(i, p.TaskId, p.TaskSize, p.CommandCount, p.ProcessPc, p.Priority, p.State.ToDisplay(), p.IoTicksRemaining);
         }
 
     }

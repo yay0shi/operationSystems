@@ -8,7 +8,10 @@ public sealed record ModelParameters(
     int TaskSize = OsModel.DefaultTaskSize,
     int TaskCommands = OsModel.DefaultTaskCommands,
     int QuantumTicks = OsModel.DefaultQuantumTicks,
-    int PriorityLevels = OsModel.DefaultPriorityLevels)
+    int PriorityLevels = OsModel.DefaultPriorityLevels,
+    int IoCommandPercent = 20,
+    int IoTicks = 5,
+    int? RandomSeed = null)
 {
     public void Validate()
     {
@@ -22,5 +25,9 @@ public sealed record ModelParameters(
             throw new ArgumentOutOfRangeException(nameof(QuantumTicks));
         if (PriorityLevels <= 0)
             throw new ArgumentOutOfRangeException(nameof(PriorityLevels));
+        if (IoCommandPercent is < 0 or > 100)
+            throw new ArgumentOutOfRangeException(nameof(IoCommandPercent));
+        if (IoTicks <= 0)
+            throw new ArgumentOutOfRangeException(nameof(IoTicks));
     }
 }

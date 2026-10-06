@@ -16,8 +16,8 @@ public enum ProcState
     /// </summary>
     Running = 2,
 
-    /// <summary
-    /// >Новое задание загружается в память
+    /// <summary>
+    /// Новое задание загружается в память
     /// </summary>
     Loading = 3,
 
@@ -55,10 +55,10 @@ public static class ProcStateNames
         ProcState.Ready => "Готов",
         ProcState.Running => "Активен",
         ProcState.Loading => "Загружается",
-        ProcState.IoInitializing => "Инициализация ввода вывода",
+        ProcState.IoInitializing => "Инициализация IO",
         ProcState.IoCompleted => "Конец ввода (вывода)",
         ProcState.BlockedByMemory => "Блокирован по обращению к памяти",
-        ProcState.BlockedByIo => "Блокирован по выполнению ввода-вывода",
+        ProcState.BlockedByIo => "Блокирован по IO",
         ProcState.Suspended => "Приостановлен",
         _ => "?",
     };
