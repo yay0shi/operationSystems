@@ -1,11 +1,12 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using ModelOS.Model;
+using ModelOS.Presentation;
 
 namespace ModelOS;
 
 public sealed class MainForm : Form
 {
-    private readonly OsModel _model = new();
+    private readonly OsModel _model;
     private readonly TickScheduler _scheduler = new();
     private readonly System.Windows.Forms.Timer _tickTimer = new() { Interval = 15 };
     private readonly Stopwatch _clock = new();
@@ -19,15 +20,7 @@ public sealed class MainForm : Form
     private readonly Button _btnHelp = new() { Text = "? справка", AutoSize = true };
     private readonly Button _btnFinish = new() { Text = "Выход", AutoSize = true };
 
-    private readonly Label _lblPc = new() { AutoSize = true };
-    private readonly Label _lblSpeed = new() { AutoSize = true };
-    private readonly Label _lblActualSpeed = new() { AutoSize = true };
-    private readonly Label _lblMemory = new() { AutoSize = true };
-    private readonly Label _lblBuffer = new() { AutoSize = true };
-    private readonly Label _lblProcessor = new() { AutoSize = true };
-    private readonly Label _lblQuantum = new() { AutoSize = true };
-    private readonly Label _lblCommand = new() { AutoSize = true, MaximumSize = new Size(1000, 0) };
-    private readonly Label _lblStatistics = new() { AutoSize = true };
+    private readonly Dictionary<string, Label> _values = new();
 
     private readonly TextBox _cmd = new() { Width = 560 };
     private readonly Button _btnRun = new() { Text = "Выполнить", AutoSize = true };
@@ -45,76 +38,88 @@ public sealed class MainForm : Form
         AllowUserToResizeRows = false,
     };
 
-    public MainForm()
+    public MainForm(ModelParameters? parameters = null)
     {
+        _model = new OsModel(parameters);
         Text = "Модель ОС";
-        Width = 1100;
-        Height = 1000;
+        ClientSize = new Size(1100, 960);
+        MinimumSize = new Size(1000, 900);
         StartPosition = FormStartPosition.CenterScreen;
+        Font = new Font("Segoe UI", 9);
 
-        var info = new FlowLayoutPanel
+        var root = new TableLayoutPanel
         {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.TopDown,
-            AutoScroll = true,
-            WrapContents = false,
+            Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 6
         };
-        var buttons = new FlowLayoutPanel { AutoSize = true, MaximumSize = new Size(960, 0), FlowDirection = FlowDirection.LeftToRight };
-        buttons.Controls.Add(_btnFaster);
-        buttons.Controls.Add(_btnSlower);
-        buttons.Controls.Add(_btnHelp);
-        buttons.Controls.Add(_btnFinish);
-        info.Controls.Add(buttons);
-        var indicators = new TableLayoutPanel
-        {
-            Width = 960,
-            Height = 28,
-            ColumnCount = 3,
-            RowCount = 1,
-        };
-        indicators.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
-        indicators.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 200));
-        indicators.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        foreach (var label in new[] { _lblPc, _lblSpeed, _lblActualSpeed })
-        {
-            label.AutoSize = false;
-            label.Dock = DockStyle.Fill;
-            label.TextAlign = ContentAlignment.MiddleLeft;
-        }
-        indicators.Controls.Add(_lblPc, 0, 0);
-        indicators.Controls.Add(_lblSpeed, 1, 0);
-        indicators.Controls.Add(_lblActualSpeed, 2, 0);
-        info.Controls.Add(indicators);
-        info.Controls.Add(_lblProcessor);
-        info.Controls.Add(_lblQuantum);
-        info.Controls.Add(_lblCommand);
-        info.Controls.Add(_lblStatistics);
-        info.Controls.Add(_lblMemory);
-        info.Controls.Add(_lblBuffer);
+        foreach (int height in new[] { 38, 68, 400, 74 })
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill };
+        _btnFaster.Text = "+ Ускорить";
+        _btnSlower.Text = "− Замедлить";
+        _btnHelp.Text = "Справка";
+        buttons.Controls.AddRange(new Control[] { _btnFaster, _btnSlower, _btnHelp, _btnFinish });
+        root.Controls.Add(buttons, 0, 0);
 
+        var indicators = CreateColumns();
+        indicators.Controls.Add(CreateCard("Время модели", ("time", "Текущий такт")), 0, 0);
+        indicators.Controls.Add(CreateCard("Заданная скорость", ("speed", "Тактов в секунду")), 1, 0);
+        indicators.Controls.Add(CreateCard("Измеренная скорость", ("actualSpeed", "С простоем")), 2, 0);
+        root.Controls.Add(indicators, 0, 1);
+
+        var summary = CreateColumns();
+        summary.RowCount = 2;
+        summary.RowStyles.Add(new RowStyle(SizeType.Absolute, 225));
+        summary.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        summary.Controls.Add(CreateCard("Процессор (ЦПр)",
+            ("processor", "Состояние"), ("assigned", "Назначен"), ("pc", "Счётчик команд PC"),
+            ("quantum", "Остаток кванта"), ("cpuTick", "Последний такт")), 0, 0);
+        summary.Controls.Add(CreateCard("Последняя выполненная команда",
+            ("commandOwner", "Исполнитель"), ("commandType", "Операция"),
+            ("commandTime", "Когда выполнена"), ("commandDetail", "Действие")), 1, 0);
+        summary.Controls.Add(CreateCard("Статистика выполнения",
+            ("completed", "Завершено заданий"), ("commands", "Выполнено команд"),
+            ("ioRequests", "Запросов I/O"), ("ioCompleted", "Прерываний I/O"),
+            ("timerInterrupts", "Прерываний таймера")), 2, 0);
+        summary.Controls.Add(CreateCard("Оперативная память",
+            ("memoryTotal", "Всего"), ("memoryUsed", "Занято"), ("memoryFree", "Свободно")), 0, 1);
+        summary.Controls.Add(CreateCard("Буфер следующего задания",
+            ("buffer", "Задание"), ("bufferSize", "Объём"), ("loading", "Загрузка")), 1, 1);
+        summary.Controls.Add(CreateCard("Параметры модели",
+            ("algorithm", "Алгоритм"), ("ioParameters", "I/O"),
+            ("processCount", "Процессы")), 2, 1);
+        root.Controls.Add(summary, 0, 2);
+        root.Controls.Add(CreateCard("Последнее прерывание", ("lastInterrupt", "Событие")), 0, 3);
+
+        _grid.Dock = DockStyle.Fill;
         _grid.ColumnCount = 8;
         _grid.RowTemplate.Height = 19;
-        _grid.ColumnHeadersHeight = 24;
-        _grid.Columns[0].Name = "№";
-        _grid.Columns[1].Name = "Task_Id";
-        _grid.Columns[2].Name = "V_task";
-        _grid.Columns[3].Name = "N_cmnd";
-        _grid.Columns[4].Name = "PCi";
-        _grid.Columns[5].Name = "Приоритет";
-        _grid.Columns[6].Name = "Состояние";
-        _grid.Columns[7].Name = "Остаток IO";
-        _grid.Columns[0].FillWeight = 45;
-        _grid.Columns[6].FillWeight = 180;
-        _grid.Columns[7].FillWeight = 75;
+        _grid.ColumnHeadersHeight = 32;
+        string[] headers = { "Строка", "Задание", "Память, ячеек", "Команд", "PC процесса", "Приоритет", "Состояние", "I/O, тактов" };
+        for (int i = 0; i < headers.Length; i++) _grid.Columns[i].Name = headers[i];
+        _grid.Columns[0].FillWeight = 50;
+        _grid.Columns[0].MinimumWidth = 65;
+        _grid.Columns[6].FillWeight = 175;
         _grid.RowCount = OsModel.PswCapacity;
-        info.Controls.Add(_grid);
+        root.Controls.Add(_grid, 0, 4);
 
-        var console = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-        console.Controls.Add(_cmd);
-        console.Controls.Add(_btnRun);
-        info.Controls.Add(console);
-        info.Controls.Add(_log);
-        Controls.Add(info);
+        var console = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 2 };
+        console.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+        console.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        console.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+        console.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        console.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        console.Controls.Add(new Label { Text = "Команда оператора", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
+        _cmd.Dock = DockStyle.Fill;
+        _cmd.PlaceholderText = "?, +, −, выход";
+        console.Controls.Add(_cmd, 1, 0);
+        console.Controls.Add(_btnRun, 2, 0);
+        _log.Dock = DockStyle.Fill;
+        console.Controls.Add(_log, 0, 1);
+        console.SetColumnSpan(_log, 3);
+        root.Controls.Add(console, 0, 5);
+        Controls.Add(root);
         _btnFaster.Click += (_, _) => DoDirective(Directive.SpeedUp);
         _btnSlower.Click += (_, _) => DoDirective(Directive.SlowDown);
         _btnHelp.Click += (_, _) => DoDirective(Directive.Help);
@@ -152,7 +157,12 @@ public sealed class MainForm : Form
         if (text.Length == 0)
             return;
         Directive dir = ParseCommand(text);
-        Log("> " + text + " –> " + dir);
+        string action = dir switch
+        {
+            Directive.SpeedUp => "ускорение", Directive.SlowDown => "замедление",
+            Directive.Help => "справка", Directive.Finish => "выход", _ => "неизвестная команда"
+        };
+        Log("> " + text + " → " + action);
         DoDirective(dir);
         _cmd.Clear();
         _cmd.Focus();
@@ -164,7 +174,7 @@ public sealed class MainForm : Form
         {
             "выход" or "завершить" => Directive.Finish,
             "+" or "ускорить" => Directive.SpeedUp,
-            "-" or "замедлить" => Directive.SlowDown,
+            "-" or "−" or "замедлить" => Directive.SlowDown,
             "?" or "справка" => Directive.Help,
             _ => Directive.None,
         };
@@ -185,7 +195,7 @@ public sealed class MainForm : Form
             Log("Неизвестная команда. Допустимо: ?, +, -, выход.");
             return;
         }
-        PumpModel(); // account for time at the old speed before changing it
+        PumpModel();
         _model.DoDirective(dir);
         if (dir is Directive.SpeedUp or Directive.SlowDown)
             ResetSpeedMeasurement();
@@ -257,24 +267,49 @@ public sealed class MainForm : Form
         dlg.ShowDialog(owner);
     }
 
+    private static TableLayoutPanel CreateColumns()
+    {
+        var panel = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 32));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 36));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 32));
+        return panel;
+    }
+
+    private GroupBox CreateCard(string title, params (string Key, string Caption)[] fields)
+    {
+        var card = new GroupBox { Text = title, Dock = DockStyle.Fill, Padding = new Padding(8) };
+        var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = fields.Length };
+        float captionPercent = title == "Статистика выполнения" ? 65
+            : title == "Параметры модели" ? 33 : title == "Последнее прерывание" ? 12 : 46;
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, captionPercent));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100 - captionPercent));
+        for (int i = 0; i < fields.Length; i++)
+        {
+            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var caption = new Label { Text = fields[i].Caption, AutoSize = true, ForeColor = Color.DimGray, Margin = new Padding(0, 3, 5, 3) };
+            var value = new Label { AutoSize = true, Margin = new Padding(0, 3, 0, 3) };
+            _values.Add(fields[i].Key, value);
+            table.Controls.Add(caption, 0, i);
+            table.Controls.Add(value, 1, i);
+            table.SizeChanged += (_, _) =>
+            {
+                caption.MaximumSize = new Size(Math.Max(1, (int)(table.ClientSize.Width * captionPercent / 100) - 5), 0);
+                value.MaximumSize = new Size(Math.Max(1, (int)(table.ClientSize.Width * (100 - captionPercent) / 100)), 0);
+            };
+        }
+        card.Controls.Add(table);
+        return card;
+    }
+
     private void ShowParams()
     {
-        _lblPc.Text = $"PC: {_model.Pc}";
-        _lblSpeed.Text = $"Speed: {_model.Speed:0.###} такт/с";
-        double measuredSeconds = (_clock.Elapsed - _measurementStartTime).TotalSeconds;
-        double measuredSpeed = measuredSeconds > 0 ? (_model.TotalTicks - _measurementStartTicks) / measuredSeconds : 0;
-        _lblActualSpeed.Text = $"Факт: {measuredSpeed:0.##} такт/с ({measuredSeconds:0.#} с)";
-        _lblProcessor.Text = $"ЦПр: процесс {(_model.CurrentProcessIndex < 0 ? "не назначен" : _model.CurrentProcessIndex.ToString())}; состояние: {_model.ProcessorState}";
-        _lblQuantum.Text = $"Квант: {_model.QuantumTicks}; осталось: {_model.QuantumRemaining}";
-        _lblCommand.Text = $"Последняя команда ЦПр: {_model.LastCommandText}";
-        _lblStatistics.Text = $"Завершено заданий: {_model.CompletedTaskCount}; команд: {_model.ExecutedCommandCount}; запросов IO: {_model.IoRequestCount}; IO: {_model.IoCommandPercent} %, {_model.IoTicks} тактов";
-        _lblMemory.Text = $"Память: всего {_model.MemSize}; занято {_model.MemUsed}; свободно {_model.FreeMemory}; процессов {_model.ProcCount}";
-        _lblBuffer.Text = $"Буфер: задание {_model.PswTask.TaskId}; память {_model.PswTask.TaskSize}; команд {_model.PswTask.CommandCount}; загрузка {(_model.CheckFreeMem() ? "возможна" : "невозможна")}";
-        for (int i = 0; i < OsModel.PswCapacity; i++)
-        {
-            var p = _model.Psw[i];
-            _grid.Rows[i].SetValues(i, p.TaskId, p.TaskSize, p.CommandCount, p.ProcessPc, p.Priority, p.State.ToDisplay(), p.IoTicksRemaining);
-        }
-
+        var display = ModelDisplay.Create(_model,
+            (_clock.Elapsed - _measurementStartTime).TotalSeconds,
+            _model.TotalTicks - _measurementStartTicks);
+        foreach (var pair in display.Values)
+            if (_values[pair.Key].Text != pair.Value) _values[pair.Key].Text = pair.Value;
+        for (int i = 0; i < display.ProcessRows.Count; i++)
+            _grid.Rows[i].SetValues(display.ProcessRows[i]);
     }
 }

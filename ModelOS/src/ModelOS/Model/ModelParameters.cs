@@ -10,8 +10,7 @@ public sealed record ModelParameters(
     int QuantumTicks = OsModel.DefaultQuantumTicks,
     int PriorityLevels = OsModel.DefaultPriorityLevels,
     int IoCommandPercent = 20,
-    int IoTicks = 5,
-    int? RandomSeed = null)
+    int IoTicks = 5)
 {
     public void Validate()
     {

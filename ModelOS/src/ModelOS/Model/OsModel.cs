@@ -34,9 +34,14 @@ public sealed class OsModel
     public long ExecutedCommandCount { get; private set; }
     public long CompletedTaskCount { get; private set; }
     public long IoRequestCount { get; private set; }
+    public long IoCompletedCount { get; private set; }
+    public long TimerInterruptCount { get; private set; }
+    public string LastInterruptText { get; private set; } = "Прерываний ещё нет";
+    public bool CpuExecutedThisTick { get; private set; }
     public string LastCommandText { get; private set; } = "Нет выполненной команды";
     public ProcessCommand? LastCommand { get; private set; }
     public int LastCommandTaskId { get; private set; }
+    public long LastCommandTick { get; private set; }
     public int IoCommandPercent => _parameters.IoCommandPercent;
     public int IoTicks => _parameters.IoTicks;
 
@@ -83,13 +88,12 @@ public sealed class OsModel
     /// </summary>
     private int _taskSeq;
     private long _readySequence;
-    private bool _deferDispatch;
 
     public OsModel(ModelParameters? parameters = null)
     {
         _parameters = parameters ?? new ModelParameters();
         _parameters.Validate();
-        _commands = new CommandExecutor(_parameters.RandomSeed);
+        _commands = new CommandExecutor();
         for (int i = 0; i < Psw.Length; i++)
             Psw[i] = new PswEntry();
     }
@@ -106,8 +110,13 @@ public sealed class OsModel
         ExecutedCommandCount = 0;
         CompletedTaskCount = 0;
         IoRequestCount = 0;
+        IoCompletedCount = 0;
+        TimerInterruptCount = 0;
+        LastInterruptText = "Прерываний ещё нет";
+        CpuExecutedThisTick = false;
         LastCommand = null;
         LastCommandTaskId = 0;
+        LastCommandTick = 0;
         LastCommandText = "Нет выполненной команды";
         Speed = DefaultSpeed;
         Finish = false;
@@ -132,10 +141,11 @@ public sealed class OsModel
         PswTask.CommandCount = _parameters.TaskCommands;
         // приоритеты распределяются циклически от 1 до PriorityLevels
         PswTask.Priority = ((_taskSeq - 1) % _parameters.PriorityLevels) + 1;
-        PswTask.State = ProcState.Ready;
+        PswTask.State = ProcState.Absent; // Буфер не является резидентным процессом.
         PswTask.ProcessPc = 0;
         PswTask.ReadyOrder = 0;
         PswTask.IoTicksRemaining = 0;
+        PswTask.IoStartedTick = 0;
         PswTask.OperandMemory = [];
     }
 
@@ -169,28 +179,15 @@ public sealed class OsModel
         int i = FindFreePsw();
         Psw[i] = PswTask.Clone();
         Psw[i].OperandMemory = Enumerable.Repeat(1.0, Psw[i].TaskSize).ToArray();
-        Psw[i].ReadyOrder = ++_readySequence;
-        MemUsed += PswTask.TaskSize;
-        ProcCount++;
-        GenNewTask();    
-        if (CurrentProcessIndex < 0 && !_deferDispatch)
-            DispatchNextProcess();
+        Process(i, ProcessEvent.Loaded);
+        GenNewTask();
         return true;
     }
     
     public void LoadCycle()
     {
-        _deferDispatch = true;
-        try
-        {
-            while (CheckFreeMem())
-                LoadTask();
-        }
-        finally
-        {
-            _deferDispatch = false;
-        }
-
+        while (CheckFreeMem())
+            LoadTask();
         if (CurrentProcessIndex < 0)
             DispatchNextProcess();
     }
@@ -198,12 +195,12 @@ public sealed class OsModel
     public void DoTick()
     {
         TotalTicks++;
+        CpuExecutedThisTick = CurrentProcessIndex >= 0;
+        if (CpuExecutedThisTick)
+            ExecuteProcessCommand();
         AdvanceIo();
-        if (CurrentProcessIndex < 0)
-            DispatchNextProcess();
-        if (CurrentProcessIndex < 0)
-            return;
-        ExecuteProcessCommand();
+        HandleTimerInterrupt();
+        CheckSystemState();
     }
 
     /// <summary>
@@ -218,6 +215,7 @@ public sealed class OsModel
         ProcessCommand command = _commands.DecodeCommand(type, process.TaskSize);
         LastCommand = command;
         LastCommandTaskId = process.TaskId;
+        LastCommandTick = TotalTicks;
         ExecutedCommandCount++;
         QuantumRemaining--;
         ExecuteOperation(process, command);
@@ -234,7 +232,6 @@ public sealed class OsModel
             case OperationCode.Subtract:
             case OperationCode.Multiply:
                 ExecuteComputation(process, command);
-                if (QuantumRemaining == 0) DispatchNextProcess();
                 break;
             case OperationCode.Io:
                 InitializeIo();
@@ -260,13 +257,8 @@ public sealed class OsModel
     private void InitializeIo()
     {
         PswEntry process = Psw[CurrentProcessIndex];
-        SaveProcessState(CurrentProcessIndex);
-        process.State = ProcState.IoInitializing;
-        process.IoTicksRemaining = IoTicks;
-        IoRequestCount++;
         LastCommandText = $"Задание {process.TaskId}: ввод-вывод, длительность {IoTicks} тактов";
-        ReleaseProcessor();
-        DispatchNextProcess();
+        Process(CurrentProcessIndex, ProcessEvent.IoRequested);
     }
 
     /// <summary>
@@ -274,27 +266,111 @@ public sealed class OsModel
     /// </summary>
     private void AdvanceIo()
     {
-        foreach (PswEntry process in Psw)
+        for (int i = 0; i < Psw.Length; i++)
         {
-            if (process.State is not (ProcState.IoInitializing or ProcState.BlockedByIo)) continue;
-            process.State = ProcState.BlockedByIo;
+            PswEntry process = Psw[i];
+            if (process.State != ProcState.BlockedByIo || process.IoStartedTick >= TotalTicks) continue;
             process.IoTicksRemaining--;
             if (process.IoTicksRemaining != 0) continue;
-            process.State = ProcState.Ready;
-            process.ReadyOrder = ++_readySequence;
+            HandleIoInterrupt(i);
         }
+    }
+
+    private void HandleIoInterrupt(int processIndex)
+    {
+        int taskId = Psw[processIndex].TaskId;
+        Process(processIndex, ProcessEvent.IoCompleted);
+        IoCompletedCount++;
+        LastInterruptText = $"Такт {TotalTicks}: завершение I/O задания {taskId}";
+    }
+
+    private void HandleTimerInterrupt()
+    {
+        if (CurrentProcessIndex < 0 || QuantumRemaining != 0) return;
+        int taskId = Psw[CurrentProcessIndex].TaskId;
+        Process(CurrentProcessIndex, ProcessEvent.QuantumExpired);
+        TimerInterruptCount++;
+        LastInterruptText = $"Такт {TotalTicks}: окончание кванта задания {taskId}";
+    }
+
+    /// <summary>После обработки событий загрузить допустимые задания и назначить свободный ЦПр.</summary>
+    public void CheckSystemState()
+    {
+        LoadCycle();
     }
 
     private void FinishProcess()
     {
         PswEntry process = Psw[CurrentProcessIndex];
         LastCommandText = $"Задание {process.TaskId}: завершение; освобождено {process.TaskSize} единиц памяти";
-        MemUsed -= process.TaskSize;
-        ProcCount--;
-        CompletedTaskCount++;
-        process.Clear();
-        ReleaseProcessor();
-        LoadCycle(); // Одно или несколько заданий из буфера при наличии ресурсов
+        Process(CurrentProcessIndex, ProcessEvent.Finished);
+    }
+
+    /// <summary>Единственная процедура переходов резидентных процессов во время работы.</summary>
+    public void Process(int processIndex, ProcessEvent reason)
+    {
+        if ((uint)processIndex >= Psw.Length)
+            throw new ArgumentOutOfRangeException(nameof(processIndex));
+        PswEntry process = Psw[processIndex];
+        bool active = process.State == ProcState.Running && CurrentProcessIndex == processIndex;
+        bool allowed = reason switch
+        {
+            ProcessEvent.Loaded => process.State == ProcState.Absent && process.TaskId > 0,
+            ProcessEvent.Assigned => process.State == ProcState.Ready && CurrentProcessIndex < 0,
+            ProcessEvent.QuantumExpired => active && QuantumRemaining == 0,
+            ProcessEvent.IoRequested => active,
+            ProcessEvent.IoCompleted => process.State == ProcState.BlockedByIo && process.IoTicksRemaining == 0,
+            ProcessEvent.Finished => active,
+            _ => false
+        };
+        if (!allowed)
+            throw new InvalidOperationException($"Недопустимое событие {reason} для состояния {process.State}");
+
+        switch (reason)
+        {
+            case ProcessEvent.Loaded:
+                MemUsed += process.TaskSize;
+                ProcCount++;
+                MakeReady(process);
+                break;
+            case ProcessEvent.Assigned:
+                process.State = ProcState.Running;
+                CurrentProcessIndex = processIndex;
+                RestoreProcessState(processIndex);
+                QuantumRemaining = QuantumTicks;
+                ProcessorState = "Работа";
+                break;
+            case ProcessEvent.QuantumExpired:
+                SaveProcessState(processIndex);
+                MakeReady(process);
+                ReleaseProcessor();
+                break;
+            case ProcessEvent.IoRequested:
+                SaveProcessState(processIndex);
+                process.State = ProcState.BlockedByIo;
+                process.IoTicksRemaining = IoTicks;
+                process.IoStartedTick = TotalTicks;
+                IoRequestCount++;
+                ReleaseProcessor();
+                break;
+            case ProcessEvent.IoCompleted:
+                MakeReady(process);
+                break;
+            case ProcessEvent.Finished:
+                MemUsed -= process.TaskSize;
+                ProcCount--;
+                CompletedTaskCount++;
+                process.Clear();
+                ReleaseProcessor();
+                break;
+        }
+    }
+
+    // Вызывается только регулировщиком.
+    private void MakeReady(PswEntry process)
+    {
+        process.State = ProcState.Ready;
+        process.ReadyOrder = ++_readySequence;
     }
 
     private void ReleaseProcessor()
@@ -315,7 +391,9 @@ public sealed class OsModel
         Psw[processIndex].ProcessPc = Pc;
     }
 
-    /// <summary>Восстанавливает аппаратный счётчик команд из слова состояния процесса.</summary>
+    /// <summary>
+    /// Восстанавливает аппаратный счётчик команд из слова состояния процесса.
+    /// </summary>
     public void RestoreProcessState(int processIndex)
     {
         if ((uint)processIndex >= Psw.Length || Psw[processIndex].IsFree)
@@ -342,32 +420,20 @@ public sealed class OsModel
     }
 
     /// <summary>
-    /// Сохраняет прежний контекст и назначает ЦПр следующему готовому процессу
+    /// Назначает свободный ЦПр; работающий процесс не вытесняется относительным приоритетом.
     /// </summary>
     public void DispatchNextProcess()
     {
-        if (CurrentProcessIndex >= 0)
-        {
-            int previous = CurrentProcessIndex;
-            SaveProcessState(previous);
-            Psw[previous].State = ProcState.Ready;
-            Psw[previous].ReadyOrder = ++_readySequence;
-            CurrentProcessIndex = -1;
-        }
+        if (CurrentProcessIndex >= 0) return;
 
         int next = GetNextProcessIndex();
         if (next < 0)
         {
-            QuantumRemaining = 0;
-            ProcessorState = "Ожидание";
+            ReleaseProcessor();
             return;
         }
 
-        Psw[next].State = ProcState.Running;
-        CurrentProcessIndex = next;
-        RestoreProcessState(next);
-        QuantumRemaining = QuantumTicks;
-        ProcessorState = "Работа";
+        Process(next, ProcessEvent.Assigned);
     }
     
     /// <summary>
@@ -396,12 +462,16 @@ public sealed class OsModel
     }
 
     public static string ShowHelpText() =>
-        "Лабораторная 4. Вариант 27: один ЦПр, относительные приоритеты (алгоритм 7)" + Environment.NewLine +
+        "Лабораторная 5. Вариант 27: один ЦПр, относительные приоритеты" + Environment.NewLine +
         Environment.NewLine +
         "НАЗНАЧЕНИЕ" + Environment.NewLine +
         $"  ЦПр выдаёт активному процессу квант {DefaultQuantumTicks} тактов. По окончании кванта" + Environment.NewLine +
         "  выбирается готовый процесс с наибольшим приоритетом; равные обслуживаются по FIFO." + Environment.NewLine +
         "  PC сохраняется при переключении и восстанавливается при назначении процесса." + Environment.NewLine +
+        "  Состояния изменяет регулировщик Process по причинам переходов." + Environment.NewLine +
+        "  Порядок такта: ЦПр, I/O, таймер, проверка системы, индикация." + Environment.NewLine +
+        "  Новый I/O отсчитывается со следующего такта; завершение вызывает прерывание." + Environment.NewLine +
+        "  Назначенный в конце такта процесс выполняет команду в следующем такте." + Environment.NewLine +
         "  Вычисление занимает один такт; ввод-вывод блокирует процесс и выполняется параллельно ЦПр." + Environment.NewLine +
         "  Завершение освобождает память, после чего загружается задание из буфера." + Environment.NewLine +
         "  Параметры модели: 20 % I/O-команд, длительность I/O 5 тактов, выгрузка 1 такт." + Environment.NewLine +
@@ -414,8 +484,9 @@ public sealed class OsModel
         Environment.NewLine +
         "ОКНО МОДЕЛИ" + Environment.NewLine +
         "  Кнопки  четыре директивы оператора" + Environment.NewLine +
-        "  PC – счётчик команд текущего активного процесса; Speed – заданная скорость" + Environment.NewLine +
-        "  Факт – число модельных тактов за время текущего замера, включая простой ЦПр" + Environment.NewLine +
+        "  Блок процессора: назначенное задание, PC и остаток кванта" + Environment.NewLine +
+        "  Последняя команда: исполнитель, операция, такт и действие; сохраняется при простое" + Environment.NewLine +
+        "  Заданная и измеренная скорости указаны в тактах в секунду; замер включает простой" + Environment.NewLine +
         "  Последняя команда – задание, тип и результат ранее исполненной команды" + Environment.NewLine +
         "  Таблица PSW – задания, счётчики, состояния" + Environment.NewLine +
         "  Состояния PSW: отсутствует, загружается, активен, готов, ввод-вывод," + Environment.NewLine +

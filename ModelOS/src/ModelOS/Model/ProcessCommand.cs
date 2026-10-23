@@ -16,7 +16,7 @@ public sealed class CommandExecutor
 {
     private readonly Random _random;
 
-    public CommandExecutor(int? seed = null) => _random = seed.HasValue ? new Random(seed.Value) : new Random();
+    public CommandExecutor() => _random = new Random();
 
     public CommandType GenerateCommand(long pc, int count, int ioPercent)
     {

@@ -37,6 +37,9 @@ public sealed class PswEntry
     /// </summary>
     public int IoTicksRemaining { get; set; }
 
+    /// <summary>Такт выдачи I/O: отсчёт начинается со следующего такта.</summary>
+    public long IoStartedTick { get; set; }
+
     /// <summary>
     /// Данные процесса, адреса математические: от 0 до TaskSize - 1
     /// </summary>
@@ -64,6 +67,7 @@ public sealed class PswEntry
         Priority = 0;
         ReadyOrder = 0;
         IoTicksRemaining = 0;
+        IoStartedTick = 0;
         OperandMemory = [];
         State = ProcState.Absent;
     }
