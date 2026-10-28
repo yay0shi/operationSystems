@@ -37,8 +37,18 @@ public sealed class PswEntry
     /// </summary>
     public int IoTicksRemaining { get; set; }
 
-    /// <summary>Такт выдачи I/O: отсчёт начинается со следующего такта.</summary>
+    /// <summary>
+    /// Такт выдачи I/O: отсчёт начинается со следующего такта
+    /// </summary>
     public long IoStartedTick { get; set; }
+
+    /// <summary>
+    /// Время загрузки и накопленные интервалы устойчивых состояний
+    /// </summary>
+    public long LoadedAtTick { get; set; }
+    public long CpuTicks { get; set; }
+    public long ReadyTicks { get; set; }
+    public long IoBlockedTicks { get; set; }
 
     /// <summary>
     /// Данные процесса, адреса математические: от 0 до TaskSize - 1
@@ -68,6 +78,10 @@ public sealed class PswEntry
         ReadyOrder = 0;
         IoTicksRemaining = 0;
         IoStartedTick = 0;
+        LoadedAtTick = 0;
+        CpuTicks = 0;
+        ReadyTicks = 0;
+        IoBlockedTicks = 0;
         OperandMemory = [];
         State = ProcState.Absent;
     }

@@ -1,4 +1,4 @@
-using ModelOS.Model;
+﻿using ModelOS.Model;
 
 namespace ModelOS.Presentation;
 
@@ -51,15 +51,48 @@ public sealed record ModelDisplay(IReadOnlyDictionary<string, string> Values, IR
             ["buffer"] = $"Задание {model.PswTask.TaskId}",
             ["bufferSize"] = $"{model.PswTask.TaskSize} ячеек; {model.PswTask.CommandCount} команд",
             ["loading"] = model.CheckFreeMem() ? "Ресурсов достаточно" : "Ожидание свободных ресурсов",
-            ["algorithm"] = "Относительные приоритеты; FIFO",
-            ["ioParameters"] = $"{model.IoCommandPercent} % команд; {model.IoTicks} тактов на I/O",
+            ["algorithm"] = "Отн. приоритеты; FIFO",
+            ["ioParameters"] = $"{model.IoCommandPercent} % I/O; {model.IoTicks} такт.",
             ["processCount"] = $"{model.ProcCount} из {OsModel.PswCapacity}",
-            ["lastInterrupt"] = model.LastInterruptText
+            ["lastInterrupt"] = model.LastInterruptText,
+            ["queues"] = $"Готовы: {model.Psw.Count(p => p.State == ProcState.Ready)}; " +
+                $"активны: {model.Psw.Count(p => p.State == ProcState.Running)}; " +
+                $"I/O: {model.Psw.Count(p => p.State == ProcState.BlockedByIo)}",
+            ["freeSlots"] = (OsModel.PswCapacity - model.ProcCount).ToString(),
+            ["priorityLevels"] = model.PriorityLevels.ToString(),
+            ["bufferPriority"] = model.PswTask.Priority.ToString(),
+            ["utilization"] = model.TotalTicks > 0
+                ? $"{100.0 * model.ExecutedCommandCount / model.TotalTicks:0.##} %" : "–",
+            ["throughput"] = model.TotalTicks > 0
+                ? $"{(double)model.CompletedTaskCount / model.TotalTicks:0.####}" : "–",
+            ["history"] = model.ExecutionHistory.Count == 0 ? "Исполнений ещё нет"
+                : string.Join(" → ", model.ExecutionHistory.Select(e => e.TaskId)),
+            ["sample"] = $"Завершённые с начала запуска: {model.Statistics.Count}",
+            ["avgSize"] = Average(model.Statistics.TotalSize, model.Statistics.Count),
+            ["avgCommands"] = Average(model.Statistics.TotalCommands, model.Statistics.Count),
+            ["avgPriority"] = Average(model.Statistics.TotalPriority, model.Statistics.Count),
+            ["avgCpu"] = Average(model.Statistics.TotalCpuTicks, model.Statistics.Count),
+            ["avgReady"] = Average(model.Statistics.TotalReadyTicks, model.Statistics.Count),
+            ["avgIo"] = Average(model.Statistics.TotalIoTicks, model.Statistics.Count),
+            ["avgSystem"] = Average(model.Statistics.TotalSystemTicks, model.Statistics.Count)
         };
+        var reasons = new List<string>();
+        if (model.Psw.All(p => !p.IsFree)) reasons.Add("Нет свободной строки PSW");
+        if (model.PswTask.TaskSize > model.FreeMemory) reasons.Add("Недостаточно памяти");
+        values["loading"] = reasons.Count == 0 ? "Ресурсов достаточно" : string.Join("; ", reasons);
+        values["memorySummary"] = $"{model.MemUsed} / {model.MemSize}; свободно {model.FreeMemory}";
+        values["interruptCounts"] = $"{model.IoCompletedCount} / {model.TimerInterruptCount}";
+        values["commandSummary"] = model.LastCommand is null ? "Команд ещё не было"
+            : $"Задание {model.LastCommandTaskId}; такт {model.LastCommandTick}; {detail}";
+        values["avgInput"] = $"Размер: {values["avgSize"]} ячеек; команд: {values["avgCommands"]}; приоритет: {values["avgPriority"]}";
+        values["avgOutput"] = $"CPU: {values["avgCpu"]}; готов: {values["avgReady"]}; I/O: {values["avgIo"]}; в системе: {values["avgSystem"]}";
         var rows = model.Psw.Select((p, i) => p.IsFree
-            ? new object[] { i, "–", "–", "–", "–", "–", "Отсутствует", "–" }
+            ? new object[] { i, "–", "–", "–", "–", "–", "Отсутствует", "–", "–", "–", "–", "–" }
             : new object[] { i, p.TaskId, p.TaskSize, p.CommandCount, p.ProcessPc, p.Priority,
-                p.State.ToDisplay(), p.State == ProcState.BlockedByIo ? p.IoTicksRemaining : "–" }).ToArray();
+                p.State.ToDisplay(), p.State == ProcState.BlockedByIo ? p.IoTicksRemaining : "–",
+                p.CpuTicks, p.ReadyTicks, p.IoBlockedTicks, model.TotalTicks - p.LoadedAtTick }).ToArray();
         return new(values, rows);
     }
+
+    private static string Average(long sum, long count) => count == 0 ? "–" : ((double)sum / count).ToString("0.##");
 }

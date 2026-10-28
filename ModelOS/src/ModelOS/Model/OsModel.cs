@@ -4,6 +4,11 @@ public sealed class OsModel
 {
     private readonly ModelParameters _parameters;
     private readonly CommandExecutor _commands;
+    private readonly Queue<ExecutionEntry> _executionHistory = new();
+    public const int HistoryCapacity = 16;
+    public IReadOnlyList<ExecutionEntry> ExecutionHistory => _executionHistory.ToArray();
+    public CompletedStatistics Statistics { get; } = new();
+    public int PriorityLevels => _parameters.PriorityLevels;
 
     // Назначение процесса и диспетчеризация
     public int CurrentProcessIndex { get; private set; } = -1;
@@ -107,6 +112,8 @@ public sealed class OsModel
     {
         Pc = 0;
         TotalTicks = 0;
+        _executionHistory.Clear();
+        Statistics.Clear();
         ExecutedCommandCount = 0;
         CompletedTaskCount = 0;
         IoRequestCount = 0;
@@ -195,12 +202,36 @@ public sealed class OsModel
     public void DoTick()
     {
         TotalTicks++;
+        AccumulateProcessTimes();
         CpuExecutedThisTick = CurrentProcessIndex >= 0;
         if (CpuExecutedThisTick)
+        {
+            RecordExecution();
             ExecuteProcessCommand();
+        }
         AdvanceIo();
         HandleTimerInterrupt();
         CheckSystemState();
+    }
+
+    /// <summary>Учёт состояния на входе в такт, до переходов и очистки PSW.</summary>
+    private void AccumulateProcessTimes()
+    {
+        foreach (PswEntry process in Psw)
+        {
+            switch (process.State)
+            {
+                case ProcState.Running: process.CpuTicks++; break;
+                case ProcState.Ready: process.ReadyTicks++; break;
+                case ProcState.BlockedByIo: process.IoBlockedTicks++; break;
+            }
+        }
+    }
+
+    private void RecordExecution()
+    {
+        if (_executionHistory.Count == HistoryCapacity) _executionHistory.Dequeue();
+        _executionHistory.Enqueue(new(TotalTicks, Psw[CurrentProcessIndex].TaskId, CurrentProcessIndex));
     }
 
     /// <summary>
@@ -329,6 +360,8 @@ public sealed class OsModel
         switch (reason)
         {
             case ProcessEvent.Loaded:
+                process.LoadedAtTick = TotalTicks;
+                process.CpuTicks = process.ReadyTicks = process.IoBlockedTicks = 0;
                 MemUsed += process.TaskSize;
                 ProcCount++;
                 MakeReady(process);
@@ -357,6 +390,7 @@ public sealed class OsModel
                 MakeReady(process);
                 break;
             case ProcessEvent.Finished:
+                Statistics.Add(process, TotalTicks);
                 MemUsed -= process.TaskSize;
                 ProcCount--;
                 CompletedTaskCount++;
@@ -462,7 +496,7 @@ public sealed class OsModel
     }
 
     public static string ShowHelpText() =>
-        "Лабораторная 5. Вариант 27: один ЦПр, относительные приоритеты" + Environment.NewLine +
+        "Лабораторная 6. Вариант 27: индикация параметров модели ОС" + Environment.NewLine +
         Environment.NewLine +
         "НАЗНАЧЕНИЕ" + Environment.NewLine +
         $"  ЦПр выдаёт активному процессу квант {DefaultQuantumTicks} тактов. По окончании кванта" + Environment.NewLine +
@@ -483,6 +517,13 @@ public sealed class OsModel
         "  выход   завершить моделирование" + Environment.NewLine +
         Environment.NewLine +
         "ОКНО МОДЕЛИ" + Environment.NewLine +
+        "  История: последние 16 фактических исполнителей по тактам, слева направо." + Environment.NewLine +
+        "  Повторы ID сохраняются; простой и назначение без команды запись не добавляют." + Environment.NewLine +
+        "  Средние: только завершённые задания с начала запуска; до завершений – прочерк." + Environment.NewLine +
+        "  CPU, Готов, I/O и В системе измеряются в модельных тактах." + Environment.NewLine +
+        "  В системе = CPU + Готов + I/O; учёт ведётся по состоянию на входе в такт." + Environment.NewLine +
+        "  Занятость ЦПр = выполненные команды / модельные такты; все команды однотактные." + Environment.NewLine +
+        "  Завершений/такт – наблюдаемая интенсивность, сравнительный расчёт относится к Lab7." + Environment.NewLine +
         "  Кнопки  четыре директивы оператора" + Environment.NewLine +
         "  Блок процессора: назначенное задание, PC и остаток кванта" + Environment.NewLine +
         "  Последняя команда: исполнитель, операция, такт и действие; сохраняется при простое" + Environment.NewLine +
