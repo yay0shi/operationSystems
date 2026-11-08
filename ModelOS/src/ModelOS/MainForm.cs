@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using ModelOS.Model;
 using ModelOS.Presentation;
 
@@ -282,7 +282,7 @@ public sealed class MainForm : Form
             ("processor", "Состояние"), ("assigned", "Назначен"), ("pc", "PC"),
             ("quantum", "Квант"), ("cpuTick", "За такт")), 1, 0);
         summary.Controls.Add(CreateCard("Следующее задание",
-            ("buffer", "Номер"), ("bufferSize", "Объём"), ("bufferPriority", "Приоритет"),
+            ("buffer", "Номер"), ("bufferSize", "Объем"), ("bufferPriority", "Приоритет"),
             ("loading", "Загрузка")), 2, 0);
         root.Controls.Add(summary, 0, 2);
 
@@ -299,7 +299,7 @@ public sealed class MainForm : Form
 
         _grid.Dock = DockStyle.Fill;
         _grid.Font = new Font("Segoe UI", 9);
-        _grid.ColumnCount = 12;
+        _grid.ColumnCount = 16;
         _grid.RowTemplate.Height = 28;
         _grid.ColumnHeadersHeight = 36;
         _grid.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
@@ -320,8 +320,8 @@ public sealed class MainForm : Form
         _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         _grid.MultiSelect = false;
         string[] headers = { "Строка", "Задание", "Память", "Команд", "PC", "Приоритет", "Состояние",
-            "I/O осталось", "CPU", "Готов", "I/O время", "В системе" };
-        int[] widths = { 80, 85, 100, 95, 75, 100, 210, 125, 85, 100, 110, 125 };
+            "I/O осталось", "CPU", "Готов", "I/O время", "T multi", "T mono", "ОС вне Ready", "Рост, %", "Готов, %" };
+        int[] widths = { 80, 85, 100, 95, 75, 100, 210, 125, 85, 100, 110, 125, 110, 140, 110, 110 };
         for (int i = 0; i < headers.Length; i++)
         {
             _grid.Columns[i].Name = headers[i];
@@ -350,7 +350,19 @@ public sealed class MainForm : Form
             ("completed", "Завершено"), ("commands", "Команд")), 1, 0);
         parameters.Controls.Add(CreateCard("Прерывания и завершения", ("interruptCounts", "I/O / таймер"),
             ("ioRequests", "Запросов I/O"), ("throughput", "Заверш./такт")), 2, 0);
-        AddDetail("Параметры и счётчики", parameters);
+        AddDetail("Параметры и счетчики", parameters);
+        var lab7 = CreateColumns();
+        lab7.Controls.Add(CreateCard("Однопрограммный эталон",
+            ("monoTotal", "Σ T mono"), ("monoAverage", "Сред. mono"), ("monoCount", "M mono")), 0, 0);
+        lab7.Controls.Add(CreateCard("Эффективность",
+            ("relativeThroughput", "D multi"), ("systemPercent", "D sys"), ("turnaround", "Оборот, такты")), 1, 0);
+        lab7.Controls.Add(CreateCard("Учет тактов",
+            ("cpuBalance", "CPU / ОС / idle"), ("systemCosts", "L/N/Init/Int/U"),
+            ("averageIncrease", "Средний рост")), 2, 0);
+        AddDetail("Расчеты", lab7);
+        AddDetail("Сравнение времен", CreateCard("Завершенные задания",
+            ("averageComparison", "Средние, такты"), ("averagePercent", "Доли времени")));
+
         AddDetail("Журнал оператора", _log);
         root.Controls.Add(details, 0, 5);
         Controls.Add(root);
@@ -364,7 +376,8 @@ public sealed class MainForm : Form
 
     private void ShowSystemParams(ModelDisplay d) => ShowValues(d, "time", "speed", "actualSpeed",
         "memorySummary", "processCount", "queues", "freeSlots", "algorithm", "priorityLevels",
-        "completed", "commands", "interruptCounts", "ioRequests", "utilization", "throughput");
+        "completed", "commands", "interruptCounts", "ioRequests", "utilization", "throughput", "monoTotal", "monoAverage", "monoCount",
+        "relativeThroughput", "systemPercent", "turnaround", "cpuBalance", "systemCosts", "averageIncrease");
 
     private void ShowNewTaskParams(ModelDisplay d) => ShowValues(d,
         "buffer", "bufferSize", "bufferPriority", "ioParameters", "loading");
@@ -382,7 +395,7 @@ public sealed class MainForm : Form
 
     private void ShowExecutionHistory(ModelDisplay d) => ShowValues(d, "history");
 
-    private void ShowAverageParams(ModelDisplay d) => ShowValues(d, "sample", "avgInput", "avgOutput");
+    private void ShowAverageParams(ModelDisplay d) => ShowValues(d, "sample", "avgInput", "avgOutput", "averageComparison", "averagePercent");
 
     private void ShowParams()
     {

@@ -18,7 +18,7 @@ public sealed class PswEntry
     public int CommandCount { get; set; }
 
     /// <summary>
-    /// Счётчик команд процесса
+    /// Счетчик команд процесса
     /// </summary>
     public long ProcessPc { get; set; }
 
@@ -38,7 +38,7 @@ public sealed class PswEntry
     public int IoTicksRemaining { get; set; }
 
     /// <summary>
-    /// Такт выдачи I/O: отсчёт начинается со следующего такта
+    /// Такт выдачи I/O: отсчет начинается со следующего такта
     /// </summary>
     public long IoStartedTick { get; set; }
 
@@ -46,6 +46,8 @@ public sealed class PswEntry
     /// Время загрузки и накопленные интервалы устойчивых состояний
     /// </summary>
     public long LoadedAtTick { get; set; }
+    public long MonoTicks { get; set; }
+    public long SystemOutsideReadyTicks { get; set; }
     public long CpuTicks { get; set; }
     public long ReadyTicks { get; set; }
     public long IoBlockedTicks { get; set; }
@@ -79,6 +81,7 @@ public sealed class PswEntry
         IoTicksRemaining = 0;
         IoStartedTick = 0;
         LoadedAtTick = 0;
+        MonoTicks = SystemOutsideReadyTicks = 0;
         CpuTicks = 0;
         ReadyTicks = 0;
         IoBlockedTicks = 0;

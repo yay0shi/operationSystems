@@ -1,4 +1,4 @@
-﻿using ModelOS.Model;
+using ModelOS.Model;
 
 namespace ModelOS.Presentation;
 
@@ -18,7 +18,7 @@ public sealed record ModelDisplay(IReadOnlyDictionary<string, string> Values, IR
             OperationCode.Multiply => "Вычисление: умножение",
             OperationCode.Io => "Запрос ввода-вывода",
             OperationCode.Exit => "Завершение задания",
-            _ => "Команд ещё не было"
+            _ => "Команд еще не было"
         };
         string prefix = $"Задание {model.LastCommandTaskId}: ";
         string detail = model.LastCommandText.StartsWith(prefix, StringComparison.Ordinal)
@@ -29,13 +29,13 @@ public sealed record ModelDisplay(IReadOnlyDictionary<string, string> Values, IR
             ["time"] = model.TotalTicks.ToString(),
             ["speed"] = $"{model.Speed:0.###} такт/с",
             ["actualSpeed"] = measurementSeconds > 0
-                ? $"{measurementTicks / measurementSeconds:0.##} такт/с за {measurementSeconds:0.#} с" : "Измерение ещё не начато",
-            ["processor"] = assigned ? "Процесс назначен" : "Ожидание готового процесса",
+                ? $"{measurementTicks / measurementSeconds:0.##} такт/с за {measurementSeconds:0.#} с" : "Измерение еще не начато",
+            ["processor"] = model.SystemOperation != "Нет" ? model.SystemOperation : assigned ? "Процесс назначен" : "Ожидание готового процесса",
             ["assigned"] = current is null ? "Нет" : $"Задание {current.TaskId} (строка {model.CurrentProcessIndex})",
             ["pc"] = current is null ? "–" : model.Pc.ToString(),
             ["quantum"] = current is null ? "–" : $"{model.QuantumRemaining} из {model.QuantumTicks} тактов",
-            ["cpuTick"] = model.TotalTicks == 0 ? "Модель ещё не выполняла такты"
-                : model.CpuExecutedThisTick ? "Выполнена одна команда" : "ЦПр простаивал",
+            ["cpuTick"] = model.TotalTicks == 0 ? "Модель еще не выполняла такты"
+                : model.CpuSystemThisTick ? $"ОС: {model.LastSystemOperation}" : model.CpuExecutedThisTick ? "Выполнена одна команда" : "ЦПр простаивал",
             ["commandOwner"] = model.LastCommand is null ? "–" : $"Задание {model.LastCommandTaskId}",
             ["commandType"] = commandType,
             ["commandTime"] = model.LastCommand is null ? "–" : $"Такт {model.LastCommandTick}",
@@ -62,19 +62,19 @@ public sealed record ModelDisplay(IReadOnlyDictionary<string, string> Values, IR
             ["priorityLevels"] = model.PriorityLevels.ToString(),
             ["bufferPriority"] = model.PswTask.Priority.ToString(),
             ["utilization"] = model.TotalTicks > 0
-                ? $"{100.0 * model.ExecutedCommandCount / model.TotalTicks:0.##} %" : "–",
+                ? $"{100.0 * (model.ExecutedCommandCount + model.CpuSystemTicks) / model.TotalTicks:0.##} %" : "–",
             ["throughput"] = model.TotalTicks > 0
                 ? $"{(double)model.CompletedTaskCount / model.TotalTicks:0.####}" : "–",
-            ["history"] = model.ExecutionHistory.Count == 0 ? "Исполнений ещё нет"
+            ["history"] = model.ExecutionHistory.Count == 0 ? "Исполнений еще нет"
                 : string.Join(" → ", model.ExecutionHistory.Select(e => e.TaskId)),
-            ["sample"] = $"Завершённые с начала запуска: {model.Statistics.Count}",
+            ["sample"] = $"Завершенные с начала запуска: {model.Statistics.Count}",
             ["avgSize"] = Average(model.Statistics.TotalSize, model.Statistics.Count),
             ["avgCommands"] = Average(model.Statistics.TotalCommands, model.Statistics.Count),
             ["avgPriority"] = Average(model.Statistics.TotalPriority, model.Statistics.Count),
             ["avgCpu"] = Average(model.Statistics.TotalCpuTicks, model.Statistics.Count),
             ["avgReady"] = Average(model.Statistics.TotalReadyTicks, model.Statistics.Count),
             ["avgIo"] = Average(model.Statistics.TotalIoTicks, model.Statistics.Count),
-            ["avgSystem"] = Average(model.Statistics.TotalSystemTicks, model.Statistics.Count)
+            ["avgSystem"] = Average(model.Statistics.TotalTurnaroundTicks, model.Statistics.Count)
         };
         var reasons = new List<string>();
         if (model.Psw.All(p => !p.IsFree)) reasons.Add("Нет свободной строки PSW");
@@ -82,15 +82,35 @@ public sealed record ModelDisplay(IReadOnlyDictionary<string, string> Values, IR
         values["loading"] = reasons.Count == 0 ? "Ресурсов достаточно" : string.Join("; ", reasons);
         values["memorySummary"] = $"{model.MemUsed} / {model.MemSize}; свободно {model.FreeMemory}";
         values["interruptCounts"] = $"{model.IoCompletedCount} / {model.TimerInterruptCount}";
-        values["commandSummary"] = model.LastCommand is null ? "Команд ещё не было"
+        values["commandSummary"] = model.LastCommand is null ? "Команд еще не было"
             : $"Задание {model.LastCommandTaskId}; такт {model.LastCommandTick}; {detail}";
         values["avgInput"] = $"Размер: {values["avgSize"]} ячеек; команд: {values["avgCommands"]}; приоритет: {values["avgPriority"]}";
         values["avgOutput"] = $"CPU: {values["avgCpu"]}; готов: {values["avgReady"]}; I/O: {values["avgIo"]}; в системе: {values["avgSystem"]}";
+        var st = model.Statistics;
+        values["monoTotal"] = st.TotalMonoTicks.ToString();
+        values["monoAverage"] = Average(st.TotalMonoTicks, st.Count);
+        values["monoCount"] = st.Count > 0 && st.TotalMonoTicks > 0
+            ? ((double)model.TotalTicks * st.Count / st.TotalMonoTicks).ToString("0.####") : "–";
+        values["relativeThroughput"] = st.Count > 0 && model.TotalTicks > 0
+            ? $"{100.0 * st.TotalMonoTicks / model.TotalTicks:0.##} %" : "–";
+        values["systemPercent"] = model.TotalTicks > 0
+            ? $"{100.0 * model.CpuSystemTicks / model.TotalTicks:0.##} %" : "–";
+        values["cpuBalance"] = $"{model.ExecutedCommandCount} / {model.CpuSystemTicks} / {model.CpuIdleTicks}";
+        values["turnaround"] = Average(st.TotalTurnaroundTicks, st.Count);
+        values["averageIncrease"] = st.Count > 0 ? $"{st.TotalIncreasePercent / st.Count:0.##} %" : "–";
+        var par = model.Parameters;
+        values["systemCosts"] = $"{par.LoadTicks} / {par.DispatchTicks} / {par.IoInitializationTicks} / {par.IoInterruptTicks} / {par.UnloadTicks}";
+        values["averageComparison"] = $"Mono: {values["monoAverage"]}; Multi: {values["turnaround"]}; ожидание: {values["avgReady"]}";
+        values["averagePercent"] = st.Count > 0
+            ? $"Рост времени: {values["averageIncrease"]}; готовность: {st.TotalReadyPercent / st.Count:0.##} %" : "Нет завершенных заданий";
         var rows = model.Psw.Select((p, i) => p.IsFree
-            ? new object[] { i, "–", "–", "–", "–", "–", "Отсутствует", "–", "–", "–", "–", "–" }
+            ? new object[] { i, "–", "–", "–", "–", "–", "Отсутствует", "–", "–", "–", "–", "–", "–", "–", "–", "–" }
             : new object[] { i, p.TaskId, p.TaskSize, p.CommandCount, p.ProcessPc, p.Priority,
                 p.State.ToDisplay(), p.State == ProcState.BlockedByIo ? p.IoTicksRemaining : "–",
-                p.CpuTicks, p.ReadyTicks, p.IoBlockedTicks, model.TotalTicks - p.LoadedAtTick }).ToArray();
+                p.CpuTicks, p.ReadyTicks, p.IoBlockedTicks, model.TotalTicks - p.LoadedAtTick,
+                p.MonoTicks, p.SystemOutsideReadyTicks,
+                p.MonoTicks > 0 ? $"{100.0 * (model.TotalTicks - p.LoadedAtTick - p.MonoTicks) / p.MonoTicks:0.##}" : "–",
+                model.TotalTicks > p.LoadedAtTick ? $"{100.0 * p.ReadyTicks / (model.TotalTicks - p.LoadedAtTick):0.##}" : "–" }).ToArray();
         return new(values, rows);
     }
 

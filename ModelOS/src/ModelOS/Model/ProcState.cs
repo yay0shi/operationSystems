@@ -8,7 +8,7 @@ public enum ProcState
     Absent = 0,
 
     /// <summary>
-    /// Готов - процесс загружен и ждёт процессора
+    /// Готов - процесс загружен и ждет процессора
     /// </summary>
     Ready = 1,
     /// <summary>
@@ -45,6 +45,7 @@ public enum ProcState
     /// Выполнение процесса приостановлено
     /// </summary>
     Suspended = 8,
+    Finishing = 9,
 }
 
 public static class ProcStateNames
@@ -60,6 +61,7 @@ public static class ProcStateNames
         ProcState.BlockedByMemory => "Блокирован по обращению к памяти",
         ProcState.BlockedByIo => "Блокирован по IO",
         ProcState.Suspended => "Приостановлен",
+        ProcState.Finishing => "Завершается",
         _ => "?",
     };
 }
