@@ -2,8 +2,12 @@ namespace ModelOS.Model;
 
 public sealed class OsModel
 {
-    private readonly ModelParameters _parameters;
-    private readonly CommandExecutor _commands;
+    private ModelParameters _parameters;
+    private readonly ParameterFile? _configuration;
+    private const int ParameterSeed = 27;
+    private const int CommandSeed = 28;
+    private Random? _parameterRandom;
+    private CommandExecutor _commands;
     private readonly Func<int, long, CommandType>? _commandSource;
     private readonly Queue<SystemWork> _systemQueue = new();
     private SystemWork? _system;
@@ -115,6 +119,11 @@ public sealed class OsModel
             Psw[i] = new PswEntry();
     }
 
+    internal OsModel(ParameterFile configuration) : this()
+    {
+        _configuration = configuration;
+    }
+
     /// <summary>
     /// Свободная память: V_free = V_озу − V_занято
     /// </summary>
@@ -122,6 +131,14 @@ public sealed class OsModel
 
     public void InitModel()
     {
+        if (_configuration is not null)
+        {
+            _parameterRandom = new Random(ParameterSeed);
+            _parameters = _configuration.GenerateSystemParameters(_parameterRandom);
+            _parameters.Validate();
+            _commands = new CommandExecutor(CommandSeed);
+        }
+
         Pc = 0;
         TotalTicks = 0;
         CpuSystemTicks = CpuIdleTicks = 0;
@@ -162,8 +179,8 @@ public sealed class OsModel
     {
         _taskSeq++;
         PswTask.TaskId = _taskSeq;
-        PswTask.TaskSize = _parameters.TaskSize;
-        PswTask.CommandCount = _parameters.TaskCommands;
+        PswTask.TaskSize = _configuration?.Generate("TaskSize", _parameterRandom!) ?? _parameters.TaskSize;
+        PswTask.CommandCount = _configuration?.Generate("TaskCommands", _parameterRandom!) ?? _parameters.TaskCommands;
         // приоритеты распределяются циклически от 1 до PriorityLevels
         PswTask.Priority = ((_taskSeq - 1) % _parameters.PriorityLevels) + 1;
         PswTask.State = ProcState.Absent; // Буфер не является резидентным процессом.
@@ -581,7 +598,11 @@ public sealed class OsModel
     }
 
     public static string ShowHelpText() => """
-        Лабораторная работа 7. Вариант 27. Расчет параметров модели ОС
+        Лабораторная работа 8. Вариант 27. Чтение файла параметров
+
+        parameters.txt читается при запуске. Строка: имя минимум максимум шаг комментарий.
+        Размер и число команд задания генерируются при заполнении буфера.
+        Начальные значения генераторов параметров и команд фиксированы.
 
         Один ЦПр; относительные приоритеты; FIFO при равных приоритетах.
         Квант расходуется только на команды задания. I/O идет параллельно ЦПр.

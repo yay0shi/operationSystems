@@ -39,8 +39,11 @@ public sealed class MainForm : Form
     };
 
     public MainForm(ModelParameters? parameters = null)
+    : this(new OsModel(parameters)) { }
+
+    internal MainForm(OsModel model)
     {
-        _model = new OsModel(parameters);
+        _model = model;
         Text = "Модель ОС";
         ClientSize = new Size(1280, 850);
         MinimumSize = new Size(1060, 760);

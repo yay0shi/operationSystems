@@ -14,6 +14,19 @@ static class Program
         }
 
         ApplicationConfiguration.Initialize();
-        Application.Run(new MainForm());
+        string path = Path.Combine(AppContext.BaseDirectory, "parameters.txt");
+        ParameterFile configuration;
+        try
+        {
+            configuration = ParameterFile.Read(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException)
+        {
+            MessageBox.Show($"{path}\n{ex.Message}", "Ошибка файла параметров",
+                MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        Application.Run(new MainForm(new OsModel(configuration)));
     }
 }
