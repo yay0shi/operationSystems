@@ -23,7 +23,8 @@ public sealed class CompletedStatistics
     {
         var result = new CompletedTask(process.TaskId, process.MonoTicks,
             finishedAtTick - process.LoadedAtTick, process.CpuTicks,
-            process.ReadyTicks, process.IoBlockedTicks, process.SystemOutsideReadyTicks);
+            process.ReadyTicks, process.IoBlockedTicks, process.SystemOutsideReadyTicks,
+            process.SuspendedTicks);
         Count++;
         TotalSize += process.TaskSize;
         TotalCommands += process.CommandCount;

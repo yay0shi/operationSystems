@@ -15,7 +15,7 @@ internal sealed class SystemWork(string name, int ticks, int owner, Action compl
 /// Итоги задания сохраняются до очистки его строки PSW
 /// </summary>
 public sealed record CompletedTask(int TaskId, long MonoTicks, long MultiTicks,
-    long CpuTicks, long ReadyTicks, long IoTicks, long SystemTicks)
+    long CpuTicks, long ReadyTicks, long IoTicks, long SystemTicks, long SuspendedTicks = 0)
 {
     public double ExecutionIncreasePercent => 100.0 * (MultiTicks - MonoTicks) / MonoTicks;
     public double ReadyPercent => 100.0 * ReadyTicks / MultiTicks;

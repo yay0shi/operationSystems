@@ -6,7 +6,9 @@ namespace ModelOS;
 
 public sealed class MainForm : Form
 {
+    private const int MaxTicksPerPump = 32;
     private readonly OsModel _model;
+    private Form? _helpWindow;
     private readonly TickScheduler _scheduler = new();
     private readonly System.Windows.Forms.Timer _tickTimer = new() { Interval = 15 };
     private readonly Stopwatch _clock = new();
@@ -70,7 +72,7 @@ public sealed class MainForm : Form
         {
             _model.InitModel();
             _model.LoadCycle();
-            Log("Модель запущена. Команды: ?, +, -, выход.");
+            Log("Модель запущена. Введите ? для списка директив.");
             _scheduler.Reset();
             _clock.Restart();
             _lastPumpTime = TimeSpan.Zero;
@@ -86,21 +88,10 @@ public sealed class MainForm : Form
         string text = _cmd.Text.Trim();
         if (text.Length == 0)
             return;
-        Directive dir = ParseCommand(text);
-        string action = dir switch
-        {
-            Directive.SpeedUp => "ускорение", Directive.SlowDown => "замедление",
-            Directive.Help => "справка", Directive.Finish => "выход", _ => "неизвестная команда"
-        };
-        Log("> " + text + " → " + action);
-        DoDirective(dir);
-        _cmd.Clear();
-        _cmd.Focus();
-    }
-
-    private Directive ParseCommand(string text)
-    {
-        return text.Trim().ToLowerInvariant() switch
+        Log("> " + text);
+        string[] parts = text.ToLowerInvariant().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        string command = string.Join(' ', parts);
+        Directive dir = command switch
         {
             "выход" or "завершить" => Directive.Finish,
             "+" or "ускорить" => Directive.SpeedUp,
@@ -108,6 +99,60 @@ public sealed class MainForm : Form
             "?" or "справка" => Directive.Help,
             _ => Directive.None,
         };
+
+        if (dir != Directive.None)
+            DoDirective(dir);
+        else
+        {
+            PumpModel();
+            if (_model.Finish) return;
+            Log(ExecuteOperatorCommand(command, parts));
+            RefreshOrClose();
+        }
+
+        if (!_model.Finish)
+        {
+            _cmd.Clear();
+            _cmd.Focus();
+        }
+    }
+
+    private string ExecuteOperatorCommand(string command, string[] parts)
+    {
+        switch (command)
+        {
+            case "авто стоп": return _model.SetAutoLoad(false);
+            case "авто пуск": return _model.SetAutoLoad(true);
+            case "загрузить": return _model.LoadOneTask();
+            case "завершить задания": return _model.DrainAndFinish();
+        }
+
+        switch (parts[0])
+        {
+            case "задание":
+                if (parts.Length == 6 && int.TryParse(parts[1], out int size) &&
+                    int.TryParse(parts[2], out int commands) && int.TryParse(parts[3], out int priority) &&
+                    int.TryParse(parts[4], out int percent) && int.TryParse(parts[5], out int ticks))
+                    return _model.SetTaskParameters(size, commands, priority, percent, ticks);
+                return "Формат: задание <размер> <команды> <приоритет> <процент_IO> <такты_IO>.";
+            case "память":
+                return parts.Length == 2 && int.TryParse(parts[1], out int memory)
+                    ? _model.ResizeMemory(memory) : "Формат: память <объём>.";
+            case "приостановить":
+            case "активизировать":
+            case "уничтожить":
+                if (parts.Length != 2 || !int.TryParse(parts[1], out int id) || id <= 0)
+                    return $"Формат: {parts[0]} <ID задания>.";
+                ProcessEvent reason = parts[0] switch
+                {
+                    "приостановить" => ProcessEvent.Suspended,
+                    "активизировать" => ProcessEvent.Resumed,
+                    _ => ProcessEvent.Destroyed
+                };
+                return _model.ControlProcess(id, reason);
+            default:
+                return "Неизвестная команда. Введите ? для справки.";
+        }
     }
 
     private void Log(string line)
@@ -120,18 +165,23 @@ public sealed class MainForm : Form
 
     private void DoDirective(Directive dir)
     {
-        if (dir == Directive.None)
+        if (dir == Directive.Help)
         {
-            Log("Неизвестная команда. Допустимо: ?, +, -, выход.");
+            ShowHelp(this);
             return;
         }
+
         PumpModel();
+        if (_model.Finish) return;
         _model.DoDirective(dir);
         if (dir is Directive.SpeedUp or Directive.SlowDown)
             ResetSpeedMeasurement();
-        if (dir == Directive.Help)
-            ShowHelp(this);
-        if (dir == Directive.Finish)
+        RefreshOrClose();
+    }
+
+    private void RefreshOrClose()
+    {
+        if (_model.Finish)
         {
             _tickTimer.Stop();
             Close();
@@ -153,9 +203,15 @@ public sealed class MainForm : Form
             _scheduler.Reset();
         else
         {
-            int dueTicks = _scheduler.Advance(elapsed, _model.Speed);
-            for (int i = 0; i < dueTicks; i++)
+            int dueTicks = _scheduler.Advance(elapsed, _model.Speed, MaxTicksPerPump);
+            for (int i = 0; i < dueTicks && !_model.Finish; i++)
                 _model.DoTick();
+        }
+
+        if (_model.Finish)
+        {
+            RefreshOrClose();
+            return;
         }
 
         if (now - _lastDisplayTime >= TimeSpan.FromMilliseconds(100))
@@ -171,9 +227,15 @@ public sealed class MainForm : Form
         _measurementStartTicks = _model.TotalTicks;
     }
 
-    internal static void ShowHelp(IWin32Window? owner)
+    internal static void ShowHelp(MainForm? owner)
     {
-        using var dlg = new Form
+        if (owner?._helpWindow is { IsDisposed: false } existing)
+        {
+            existing.Activate();
+            return;
+        }
+
+        var dlg = new Form
         {
             Text = "Справка – Модель ОС",
             Width = 800,
@@ -182,10 +244,12 @@ public sealed class MainForm : Form
             MinimizeBox = false,
             MaximizeBox = false,
         };
-        var text = new RichTextBox
+        var text = new TextBox
         {
             Dock = DockStyle.Fill,
             ReadOnly = true,
+            Multiline = true,
+            ScrollBars = ScrollBars.Vertical,
             BorderStyle = BorderStyle.None,
             Font = new Font(FontFamily.GenericMonospace, 10),
             Text = OsModel.ShowHelpText(),
@@ -194,7 +258,16 @@ public sealed class MainForm : Form
         dlg.Controls.Add(text);
         dlg.Controls.Add(ok);
         dlg.AcceptButton = ok;
-        dlg.ShowDialog(owner);
+        if (owner is null)
+        {
+            using (dlg) dlg.ShowDialog();
+        }
+        else
+        {
+            owner._helpWindow = dlg;
+            ok.Click += (_, _) => dlg.Close();
+            dlg.Show(owner);
+        }
     }
 
     private static TableLayoutPanel CreateColumns()
@@ -239,7 +312,7 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill, Padding = new Padding(10), ColumnCount = 1, RowCount = 6
         };
-        foreach (int height in new[] { 42, 58, 166, 38 })
+        foreach (int height in new[] { 42, 58, 192, 38 })
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 186));
@@ -286,7 +359,7 @@ public sealed class MainForm : Form
             ("quantum", "Квант"), ("cpuTick", "За такт")), 1, 0);
         summary.Controls.Add(CreateCard("Следующее задание",
             ("buffer", "Номер"), ("bufferSize", "Объем"), ("bufferPriority", "Приоритет"),
-            ("loading", "Загрузка")), 2, 0);
+            ("bufferIo", "Ввод-вывод"), ("admission", "Приём"), ("loading", "Ресурсы")), 2, 0);
         root.Controls.Add(summary, 0, 2);
 
         var history = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
@@ -383,7 +456,7 @@ public sealed class MainForm : Form
         "relativeThroughput", "systemPercent", "turnaround", "cpuBalance", "systemCosts", "averageIncrease");
 
     private void ShowNewTaskParams(ModelDisplay d) => ShowValues(d,
-        "buffer", "bufferSize", "bufferPriority", "ioParameters", "loading");
+        "buffer", "bufferSize", "bufferPriority", "ioParameters", "bufferIo", "admission", "loading");
 
     private void ShowCpuParams(ModelDisplay d) => ShowValues(d,
         "processor", "assigned", "pc", "quantum", "cpuTick", "commandSummary", "lastInterrupt");

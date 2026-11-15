@@ -8,5 +8,8 @@ public enum ProcessEvent
     QuantumExpired,
     IoRequested,
     IoCompleted,
-    Finished
+    Finished,
+    Suspended,
+    Resumed,
+    Destroyed,
 }

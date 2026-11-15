@@ -14,6 +14,19 @@ static class Program
         }
 
         ApplicationConfiguration.Initialize();
+        int? seed = null;
+        if (args.Length != 0)
+        {
+            if (args.Length != 2 || !args[0].Equals("--seed", StringComparison.OrdinalIgnoreCase) ||
+                !int.TryParse(args[1], out int value))
+            {
+                MessageBox.Show("Формат запуска: ModelOS.exe --seed <целое Int32>", "Ошибка аргументов",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            seed = value;
+        }
+
         string path = Path.Combine(AppContext.BaseDirectory, "parameters.txt");
         ParameterFile configuration;
         try
@@ -27,6 +40,6 @@ static class Program
             return;
         }
 
-        Application.Run(new MainForm(new OsModel(configuration)));
+        Application.Run(new MainForm(new OsModel(configuration, seed)));
     }
 }

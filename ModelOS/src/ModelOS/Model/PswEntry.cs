@@ -35,6 +35,10 @@ public sealed class PswEntry
     /// <summary>
     /// Оставшаяся длительность операции ввода-вывода в модельных тактах
     /// </summary>
+    public int IoCommandPercent { get; set; }
+    public int IoTicks { get; set; }
+    public long SuspendedTicks { get; set; }
+
     public int IoTicksRemaining { get; set; }
 
     /// <summary>
@@ -78,6 +82,8 @@ public sealed class PswEntry
         ProcessPc = 0;
         Priority = 0;
         ReadyOrder = 0;
+        IoCommandPercent = IoTicks = 0;
+        SuspendedTicks = 0;
         IoTicksRemaining = 0;
         IoStartedTick = 0;
         LoadedAtTick = 0;

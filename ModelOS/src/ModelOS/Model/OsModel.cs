@@ -77,6 +77,10 @@ public sealed class OsModel
     /// Флаг завершения моделирования
     /// </summary>
     public bool Finish { get; private set; }
+    public bool AutoLoad { get; private set; }
+    public bool Draining { get; private set; }
+
+    private readonly int? _seed;
 
     /// <summary>
     /// Объем памяти модели
@@ -119,9 +123,10 @@ public sealed class OsModel
             Psw[i] = new PswEntry();
     }
 
-    internal OsModel(ParameterFile configuration) : this()
+    internal OsModel(ParameterFile configuration, int? seed = null) : this()
     {
         _configuration = configuration;
+        _seed = seed;
     }
 
     /// <summary>
@@ -133,10 +138,10 @@ public sealed class OsModel
     {
         if (_configuration is not null)
         {
-            _parameterRandom = new Random(ParameterSeed);
+            _parameterRandom = new Random(_seed ?? ParameterSeed);
             _parameters = _configuration.GenerateSystemParameters(_parameterRandom);
             _parameters.Validate();
-            _commands = new CommandExecutor(CommandSeed);
+            _commands = new CommandExecutor(_seed.HasValue ? ~_seed.Value : CommandSeed);
         }
 
         Pc = 0;
@@ -161,7 +166,8 @@ public sealed class OsModel
         LastCommandTick = 0;
         LastCommandText = "Нет выполненной команды";
         Speed = DefaultSpeed;
-        Finish = false;
+        Finish = Draining = false;
+        AutoLoad = true;
         MemSize = _parameters.MemorySize;
         CurrentProcessIndex = -1;
         ProcessorState = "Ожидание";
@@ -183,6 +189,8 @@ public sealed class OsModel
         PswTask.CommandCount = _configuration?.Generate("TaskCommands", _parameterRandom!) ?? _parameters.TaskCommands;
         // приоритеты распределяются циклически от 1 до PriorityLevels
         PswTask.Priority = ((_taskSeq - 1) % _parameters.PriorityLevels) + 1;
+        PswTask.IoCommandPercent = IoCommandPercent;
+        PswTask.IoTicks = IoTicks;
         PswTask.State = ProcState.Absent; // Буфер не является резидентным процессом.
         PswTask.ProcessPc = 0;
         PswTask.ReadyOrder = 0;
@@ -205,6 +213,7 @@ public sealed class OsModel
 
     public bool CheckFreeMem()
     {
+        if (Draining || Finish) return false;
         if (_parameters.TaskLimit is int limit && _loadedTasks >= limit) return false;
         if (FindFreePsw() < 0)
             return false;
@@ -237,7 +246,7 @@ public sealed class OsModel
     public void LoadCycle()
     {
         if (_system is not null || _systemQueue.Count > 0) return;
-        while (CheckFreeMem())
+        while (AutoLoad && CheckFreeMem())
         {
             LoadTask();
             if (_system is not null || _systemQueue.Count > 0) return;
@@ -259,7 +268,9 @@ public sealed class OsModel
 
     public void DoTick()
     {
+        if (Finish) return;
         CheckSystemState();
+        if (Finish) return;
         StartNextSystemOperation();
         TotalTicks++;
         CpuSystemThisTick = _system is not null;
@@ -301,7 +312,9 @@ public sealed class OsModel
         foreach (var process in Psw)
         {
             if (process.IsFree || process.State == ProcState.Ready) continue;
-            if (process.State == ProcState.BlockedByIo)
+            if (process.State == ProcState.Suspended)
+                process.SuspendedTicks++;
+            else if (process.State == ProcState.BlockedByIo)
             {
                 process.IoBlockedTicks++;
                 process.MonoTicks++;
@@ -332,7 +345,7 @@ public sealed class OsModel
     {
         PswEntry process = Psw[CurrentProcessIndex];
         CommandType type = _commandSource?.Invoke(process.TaskId, Pc)
-            ?? _commands.GenerateCommand(Pc, process.CommandCount, IoCommandPercent);
+            ?? _commands.GenerateCommand(Pc, process.CommandCount, process.IoCommandPercent);
         Pc++; // Длина любой команды = 1
         process.ProcessPc = Pc;
         ProcessCommand command = _commands.DecodeCommand(type, process.TaskSize);
@@ -380,7 +393,7 @@ public sealed class OsModel
     private void InitializeIo()
     {
         PswEntry process = Psw[CurrentProcessIndex];
-        LastCommandText = $"Задание {process.TaskId}: ввод-вывод, длительность {IoTicks} тактов";
+        LastCommandText = $"Задание {process.TaskId}: ввод-вывод, длительность {process.IoTicks} тактов";
         Process(CurrentProcessIndex, ProcessEvent.IoRequested);
     }
 
@@ -424,7 +437,8 @@ public sealed class OsModel
     public void CheckSystemState()
     {
         StartNextSystemOperation();
-        if (_system is null) LoadCycle();
+        CheckDrainComplete();
+        if (!Finish && _system is null) LoadCycle();
     }
 
     private void FinishProcess()
@@ -449,6 +463,9 @@ public sealed class OsModel
             ProcessEvent.IoRequested => active,
             ProcessEvent.IoCompleted => process.State == ProcState.IoCompleted && process.IoTicksRemaining == 0,
             ProcessEvent.Finished => active,
+            ProcessEvent.Suspended => !Draining && (active || process.State == ProcState.Ready),
+            ProcessEvent.Resumed => process.State == ProcState.Suspended,
+            ProcessEvent.Destroyed => !process.IsFree,
             _ => false
         };
         if (!allowed)
@@ -479,12 +496,29 @@ public sealed class OsModel
                 EnqueueSystem("Инициализация I/O", _parameters.IoInitializationTicks, processIndex, () =>
                 {
                     process.State = ProcState.BlockedByIo;
-                    process.IoTicksRemaining = IoTicks;
+                    process.IoTicksRemaining = process.IoTicks;
                     process.IoStartedTick = TotalTicks;
                 });
                 break;
             case ProcessEvent.IoCompleted:
                 MakeReady(process);
+                break;
+            case ProcessEvent.Suspended:
+                if (active)
+                {
+                    SaveProcessState(processIndex);
+                    ReleaseProcessor();
+                }
+                CancelSystemWork(processIndex);
+                process.State = ProcState.Suspended;
+                break;
+            case ProcessEvent.Resumed:
+                MakeReady(process);
+                break;
+            case ProcessEvent.Destroyed:
+                if (active) ReleaseProcessor();
+                CancelSystemWork(processIndex);
+                RemoveProcess(process);
                 break;
             case ProcessEvent.Finished:
                 process.State = ProcState.Finishing;
@@ -492,16 +526,113 @@ public sealed class OsModel
                 EnqueueSystem("Выгрузка", _parameters.UnloadTicks, processIndex, () =>
                 {
                     Statistics.Add(process, TotalTicks);
-                    MemUsed -= process.TaskSize;
-                    ProcCount--;
                     CompletedTaskCount++;
-                    process.Clear();
+                    RemoveProcess(process);
                 });
                 break;
         }
     }
 
-    // Вызывается только регулировщиком.
+    public string SetTaskParameters(int size, int commands, int priority, int ioPercent, int ioTicks)
+    {
+        if (Draining) return "Приём заданий закрыт.";
+        if (size is <= 0 or > ushort.MaxValue || commands <= 0 || priority < 1 ||
+            priority > _parameters.PriorityLevels || ioPercent is < 0 or > 100 || ioTicks <= 0)
+            return $"Допустимы размер 1–65535, команды > 0, приоритет 1–{_parameters.PriorityLevels}, I/O 0–100 % и такты I/O > 0.";
+
+        PswTask.TaskSize = size;
+        PswTask.CommandCount = commands;
+        PswTask.Priority = priority;
+        PswTask.IoCommandPercent = ioPercent;
+        PswTask.IoTicks = ioTicks;
+        return $"Параметры задания № {PswTask.TaskId} изменены.";
+    }
+
+    public string SetAutoLoad(bool enabled)
+    {
+        if (Draining) return "Приём заданий закрыт.";
+        AutoLoad = enabled;
+        return enabled ? "Автозагрузка включена." : "Автозагрузка приостановлена.";
+    }
+
+    public string LoadOneTask()
+    {
+        if (Draining || Finish) return "Приём заданий закрыт.";
+        if (FindFreePsw() < 0) return "Нет свободной строки PSW.";
+        if (PswTask.TaskSize > FreeMemory) return "Недостаточно свободной памяти.";
+        int id = PswTask.TaskId;
+        return LoadTask() ? $"Задание № {id} принято." : "Достигнут предел числа заданий.";
+    }
+
+    public string ResizeMemory(int size)
+    {
+        if (size is <= 0 or > ushort.MaxValue || size < MemUsed)
+            return $"Допустимый объём ОЗУ от {Math.Max(1, MemUsed)} до 65535 ячеек.";
+        MemSize = size;
+        return $"Объём ОЗУ изменён до {size} ячеек.";
+    }
+
+    public string ControlProcess(int taskId, ProcessEvent reason)
+    {
+        int index = Array.FindIndex(Psw, p => !p.IsFree && p.TaskId == taskId);
+        if (index < 0) return $"Задание № {taskId} отсутствует.";
+        PswEntry process = Psw[index];
+
+        switch (reason)
+        {
+            case ProcessEvent.Suspended:
+                if (Draining) return "Модель завершает принятые задания.";
+                if (process.State is not (ProcState.Ready or ProcState.Running))
+                    return "Приостановить можно готовый или активный процесс.";
+                break;
+            case ProcessEvent.Resumed:
+                if (process.State != ProcState.Suspended) return "Процесс должен быть приостановлен.";
+                break;
+            case ProcessEvent.Destroyed:
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(reason));
+        }
+
+        Process(index, reason);
+        CheckDrainComplete();
+        return $"Директива выполнена для задания № {taskId}. Состояние: {process.State.ToDisplay()}.";
+    }
+
+    public string DrainAndFinish()
+    {
+        Draining = true;
+        AutoLoad = false;
+        for (int i = 0; i < Psw.Length; i++)
+            if (Psw[i].State == ProcState.Suspended) Process(i, ProcessEvent.Resumed);
+        CheckDrainComplete();
+        return "Приём закрыт. Модель выключится после выполнения принятых заданий.";
+    }
+
+    private void CheckDrainComplete()
+    {
+        if (Draining && ProcCount == 0 && _system is null && _systemQueue.Count == 0)
+            Finish = true;
+    }
+
+    private void CancelSystemWork(int index)
+    {
+        if (_system?.Owner == index) _system = null;
+        int count = _systemQueue.Count;
+        for (int i = 0; i < count; i++)
+        {
+            var work = _systemQueue.Dequeue();
+            if (work.Owner != index) _systemQueue.Enqueue(work);
+        }
+    }
+
+    private void RemoveProcess(PswEntry process)
+    {
+        MemUsed -= process.TaskSize;
+        ProcCount--;
+        process.Clear();
+    }
+
     private void MakeReady(PswEntry process)
     {
         process.State = ProcState.Ready;
@@ -598,11 +729,11 @@ public sealed class OsModel
     }
 
     public static string ShowHelpText() => """
-        Лабораторная работа 8. Вариант 27. Чтение файла параметров
+        Лабораторная работа 9. Вариант 27. Директивы оператора
 
         parameters.txt читается при запуске. Строка: имя минимум максимум шаг комментарий.
         Размер и число команд задания генерируются при заполнении буфера.
-        Начальные значения генераторов параметров и команд фиксированы.
+        ModelOS.exe --seed 42 задаёт начальное значение генерации.
 
         Один ЦПр; относительные приоритеты; FIFO при равных приоритетах.
         Квант расходуется только на команды задания. I/O идет параллельно ЦПр.
@@ -614,7 +745,7 @@ public sealed class OsModel
         T_mono: собственная загрузка, фактические команды, физический I/O, выгрузка.
         Exit занимает дополнительный такт после заданного числа обычных команд.
         T_multi: от начала загрузки до окончания завершения задания.
-        T_multi = CPU + готов + I/O + системное время вне готовности.
+        T_multi = CPU + готов + I/O + системное время вне готовности + приостановка.
         Системные задержки готовых уже входят в их ожидание; повторно не добавляются.
         D_exe = 100*(T_multi-T_mono)/T_mono; D_ready = 100*готов/T_multi.
         D_sys = 100*системные такты ЦПр/общее время.
@@ -628,6 +759,14 @@ public sealed class OsModel
 
         ?, справка – помощь; +, ускорить – быстрее; -, замедлить – медленнее;
         выход, завершить – завершить работу. ModelOS.exe /? – справка и выход.
+        авто стоп / авто пуск — управление автозагрузкой.
+        задание 100 40 1 20 5 — размер, команды, приоритет, процент I/O, такты I/O.
+        загрузить — принять одно задание из буфера.
+        приостановить 3 / активизировать 3 / уничтожить 3 — команды для задания № 3.
+        Приостановить можно готовый или активный процесс.
+        завершить задания — закрыть приём, активизировать приостановленные и дождаться выполнения.
+        память 4096 — изменить объём ОЗУ в ячейках.
+
         История показывает 16 последних фактических исполнителей команд.
         В таблице все 16 строк PSW; дополнительные показатели доступны прокруткой.
         Вкладки: события, средние, расчет Lab7, параметры и журнал оператора.
